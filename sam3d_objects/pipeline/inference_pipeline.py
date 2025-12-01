@@ -295,6 +295,90 @@ class InferencePipeline:
         logger.info(f"Using pose decoder: {pose_decoder_name}")
         return get_pose_decoder(pose_decoder_name)
 
+    def _decode_all_view_poses(
+        self, 
+        all_view_poses_raw: dict, 
+        view_ss_input_dicts: list,
+    ) -> list:
+        """
+        Decode raw pose predictions for all views.
+        
+        Each view uses its OWN pointmap_scale/shift for decoding, because:
+        1. Each view's pointmap is independently normalized
+        2. The network predicts pose in the normalized space of that view
+        3. To get the correct metric pose, we must use that view's normalization factors
+        
+        If the network predictions are correct and consistent, then all views
+        should decode to the SAME metric pose (same object position/scale in world).
+        
+        Args:
+            all_view_poses_raw: Dict with keys like 'scale', 'translation', etc.
+                Each value has shape (num_views, batch, ...)
+            view_ss_input_dicts: List of input dicts for each view
+                
+        Returns:
+            List of decoded pose dicts, one per view
+        """
+        num_views = list(all_view_poses_raw.values())[0].shape[0]
+        decoded_poses = []
+        
+        # Determine target device
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dtype = torch.float32  # pose_decoder expects float32
+        
+        for view_idx in range(num_views):
+            # Extract raw pose for this view and ensure all on same device with float32
+            view_pose_raw = {}
+            for key, tensor in all_view_poses_raw.items():
+                # tensor shape: (num_views, batch, ...)
+                t = tensor[view_idx]  # (batch, ...)
+                if torch.is_tensor(t):
+                    view_pose_raw[key] = t.to(device=device, dtype=dtype)
+                else:
+                    view_pose_raw[key] = torch.tensor(t, device=device, dtype=dtype)
+            
+            # Add shape (required by pose_decoder but not used for pose)
+            if 'shape' not in view_pose_raw:
+                sample_tensor = list(view_pose_raw.values())[0]
+                view_pose_raw['shape'] = torch.zeros(
+                    sample_tensor.shape[0], 4096, 8, 
+                    device=device, 
+                    dtype=dtype
+                )
+            
+            # Use THIS view's pointmap_scale/shift for decoding
+            pointmap_scale = view_ss_input_dicts[view_idx].get("pointmap_scale", None)
+            pointmap_shift = view_ss_input_dicts[view_idx].get("pointmap_shift", None)
+            if pointmap_scale is not None and torch.is_tensor(pointmap_scale):
+                pointmap_scale = pointmap_scale.to(device=device, dtype=dtype)
+            if pointmap_shift is not None and torch.is_tensor(pointmap_shift):
+                pointmap_shift = pointmap_shift.to(device=device, dtype=dtype)
+            
+            # Decode pose
+            decoded = self.pose_decoder(
+                view_pose_raw,
+                scene_scale=pointmap_scale,
+                scene_shift=pointmap_shift,
+            )
+            
+            # Convert tensors to numpy for easier handling
+            decoded_np = {}
+            for key, value in decoded.items():
+                if torch.is_tensor(value):
+                    decoded_np[key] = value.detach().cpu().numpy()
+                else:
+                    decoded_np[key] = value
+            
+            # Save the pointmap scale/shift used for this view
+            if pointmap_scale is not None:
+                decoded_np['pointmap_scale'] = pointmap_scale.detach().cpu().numpy() if torch.is_tensor(pointmap_scale) else pointmap_scale
+            if pointmap_shift is not None:
+                decoded_np['pointmap_shift'] = pointmap_shift.detach().cpu().numpy() if torch.is_tensor(pointmap_shift) else pointmap_shift
+            
+            decoded_poses.append(decoded_np)
+        
+        return decoded_poses
+
     def init_ss_preprocessor(self, ss_preprocessor, ss_generator_config_path):
         if ss_preprocessor is not None:
             return ss_preprocessor
@@ -988,14 +1072,15 @@ class InferencePipeline:
                     self.ss_condition_input_mapping,
                 )
                 
-                # 注入多视角支持
+                # 注入多视角支持，并保存所有视角的 pose
                 with inject_generator_multi_view(
                     ss_generator, 
                     num_views=num_views, 
                     num_steps=ss_generator.inference_steps,
                     mode=mode,
                     attention_logger=attention_logger,
-                ):
+                    save_all_view_poses=True,  # 保存所有视角的 pose
+                ) as all_view_poses_storage:
                     return_dict = ss_generator(
                         latent_shape_dict,
                         image.device,
@@ -1005,6 +1090,43 @@ class InferencePipeline:
                 
                 if not self.is_mm_dit():
                     return_dict = {"shape": return_dict}
+                
+                # 获取每个视角独立迭代的最终 pose 状态
+                # all_view_poses_storage['per_view_x_t'] 包含每个视角的完整状态
+                # 这些是真正独立迭代出来的：
+                # - shape: 所有视角共享（用平均 velocity 更新）
+                # - pose: 每个视角独立（用自己的 velocity 更新）
+                if all_view_poses_storage is not None and all_view_poses_storage.get('per_view_x_t'):
+                    per_view_x_t = all_view_poses_storage['per_view_x_t']
+                    
+                    # 提取每个视角的 pose 部分
+                    POSE_KEYS = {'translation', 'rotation', 'scale', 'translation_scale',
+                                '6drotation', '6drotation_normalized', 'quaternion'}
+                    
+                    all_view_poses_raw = {}
+                    for key in per_view_x_t[0].keys():
+                        if key in POSE_KEYS:
+                            # Stack all views' pose for this key
+                            stacked = torch.stack([per_view_x_t[i][key] for i in range(num_views)])
+                            all_view_poses_raw[key] = stacked.detach().cpu()
+                    
+                    return_dict["all_view_poses_raw"] = all_view_poses_raw
+                    
+                    logger.info(f"[Stage 1 Multi-view] Got independently iterated poses for {num_views} views")
+                    logger.info(f"  Keys: {list(all_view_poses_raw.keys())}")
+                    logger.info(f"  Steps iterated: {all_view_poses_storage.get('step_count', 'unknown')}")
+                    
+                    # 用 View 0 的独立迭代结果覆盖 return_dict 中的 pose
+                    # 这样 final output 就是 View 0 真正独立迭代出来的 pose
+                    logger.info(f"  [FIX] Replacing solver's pose with View 0's independently iterated pose")
+                    for key in ['scale', 'translation', '6drotation_normalized', 'translation_scale']:
+                        if key in per_view_x_t[0]:
+                            old_value = return_dict[key].cpu() if key in return_dict else None
+                            new_value = per_view_x_t[0][key]
+                            return_dict[key] = new_value
+                            if old_value is not None:
+                                diff = (old_value - new_value.cpu()).abs().max().item()
+                                logger.info(f"    {key}: replaced, max diff from solver = {diff:.6f}")
 
                 shape_latent = return_dict["shape"]
                 logger.info(f"[Stage 1 Multi-view] Generated shape_latent shape: {shape_latent.shape}")
@@ -1123,6 +1245,8 @@ class InferencePipeline:
         use_distillation=False,
         attention_logger: Optional[Any] = None,
         weighting_config: Optional[Any] = None,
+        save_stage2_init: bool = False,
+        save_stage2_init_path: Optional[Any] = None,
     ) -> sp.SparseTensor:
         """
         多视角结构化潜在生成（带加权融合，两阶段方法）
@@ -1138,6 +1262,8 @@ class InferencePipeline:
             use_distillation: 是否使用蒸馏
             attention_logger: 注意力记录器
             weighting_config: 加权配置
+            save_stage2_init: 是否保存 Stage 2 初始 latent
+            save_stage2_init_path: 保存路径
         """
         from sam3d_objects.pipeline.multi_view_weighted import (
             inject_weighted_multi_view_with_precomputed_weights,
@@ -1261,17 +1387,52 @@ class InferencePipeline:
                     attention_logger.start_stage("slat")
                     attention_logger.set_num_views(num_views)
                 
-                # 用扩展后的权重进行完整迭代
-                with inject_weighted_multi_view_with_precomputed_weights(
-                    slat_generator,
-                    num_views=num_views,
-                    num_steps=original_steps,
-                    precomputed_weights=weights_expanded,  # 使用扩展后的权重
-                    attention_logger=attention_logger,
-                ):
-                    slat = slat_generator(
-                        latent_shape, DEVICE, *condition_args, **condition_kwargs
-                    )
+                # 生成初始噪声（用于保存和迭代）
+                initial_noise = slat_generator._generate_noise(latent_shape, DEVICE)
+                
+                # 保存 Stage 2 初始 latent（如果需要）
+                if save_stage2_init and save_stage2_init_path is not None:
+                    logger.info(f"[Stage 2 Weighted] Saving Stage 2 initial latent to {save_stage2_init_path}")
+                    # 保存所有需要的信息
+                    stage2_init_data = {
+                        "coords": coords.cpu(),
+                        "initial_noise": initial_noise.cpu() if torch.is_tensor(initial_noise) else initial_noise,
+                        "latent_shape": latent_shape,
+                        "num_views": num_views,
+                        "inference_steps": original_steps,
+                        # 保存条件编码（已经 embed 过的）
+                        "condition_args": tuple(
+                            arg.cpu() if torch.is_tensor(arg) else arg 
+                            for arg in condition_args[:-1]  # 排除 coords numpy
+                        ),
+                        # 保存配置
+                        "slat_cfg_strength": self.slat_cfg_strength,
+                        "use_distillation": use_distillation,
+                    }
+                    torch.save(stage2_init_data, save_stage2_init_path)
+                    logger.info(f"[Stage 2 Weighted] Stage 2 init saved: noise shape={initial_noise.shape if torch.is_tensor(initial_noise) else 'dict'}")
+                
+                # 临时替换 _generate_noise 方法，让它返回我们预先生成的噪声
+                original_generate_noise = slat_generator._generate_noise
+                def fixed_noise_generator(shape, device):
+                    return initial_noise.to(device)
+                slat_generator._generate_noise = fixed_noise_generator
+                
+                # 用扩展后的权重进行完整迭代（使用指定的初始噪声）
+                try:
+                    with inject_weighted_multi_view_with_precomputed_weights(
+                        slat_generator,
+                        num_views=num_views,
+                        num_steps=original_steps,
+                        precomputed_weights=weights_expanded,  # 使用扩展后的权重
+                        attention_logger=attention_logger,
+                    ):
+                        slat = slat_generator(
+                            latent_shape, DEVICE, *condition_args, **condition_kwargs
+                        )
+                finally:
+                    # 恢复原始的 _generate_noise 方法
+                    slat_generator._generate_noise = original_generate_noise
                 
                 logger.info(f"[Stage 2 Weighted] Generated slat shape: {slat[0].shape if isinstance(slat, (list, tuple)) else slat.shape}")
                 slat = sp.SparseTensor(
@@ -1288,6 +1449,7 @@ class InferencePipeline:
         self,
         view_images: List[Union[np.ndarray, Image.Image]],
         view_masks: List[Optional[Union[None, np.ndarray, Image.Image]]] = None,
+        view_pointmaps: Optional[List[Optional[np.ndarray]]] = None,  # 外部 pointmap
         num_samples: int = 1,
         seed: Optional[int] = None,
         stage1_inference_steps: Optional[int] = None,
@@ -1302,6 +1464,8 @@ class InferencePipeline:
         mode: Literal['stochastic', 'multidiffusion'] = 'multidiffusion',
         attention_logger: Optional[Any] = None,
         weighting_config: Optional[Any] = None,  # 加权配置
+        save_stage2_init: bool = False,  # 是否保存 Stage 2 初始 latent
+        save_stage2_init_path: Optional[Any] = None,  # 保存路径
     ) -> dict:
         """
         多视角推理主函数
@@ -1309,6 +1473,10 @@ class InferencePipeline:
         Args:
             view_images: 每个视角的图像列表
             view_masks: 每个视角的掩码列表（可选）
+            view_pointmaps: 每个视角的外部 pointmap 列表（可选）
+                - 格式: (3, H, W) 的 numpy array，PyTorch3D 坐标系
+                - 如果提供，将使用外部 pointmap 而不是内置深度模型计算
+                - 可以来自 DA3 等外部深度估计模型
             num_samples: 生成样本数
             seed: 随机种子
             stage1_inference_steps: Stage 1推理步数
@@ -1327,6 +1495,13 @@ class InferencePipeline:
             view_masks = [None] * num_views
         assert len(view_masks) == num_views, "Number of masks must match number of images"
         
+        # 处理外部 pointmap
+        if view_pointmaps is not None:
+            assert len(view_pointmaps) == num_views, "Number of pointmaps must match number of images"
+            logger.info(f"Using external pointmaps for {sum(1 for p in view_pointmaps if p is not None)}/{num_views} views")
+        else:
+            view_pointmaps = [None] * num_views
+        
         if seed is not None:
             torch.manual_seed(seed)
         
@@ -1336,7 +1511,8 @@ class InferencePipeline:
         # 注意：需要先将mask合并到图像的alpha通道，然后调用preprocess_image
         view_ss_input_dicts = []
         view_slat_input_dicts = []
-        for i, (image, mask) in enumerate(zip(view_images, view_masks)):
+        raw_view_pointmaps: List[np.ndarray] = []
+        for i, (image, mask, ext_pointmap) in enumerate(zip(view_images, view_masks, view_pointmaps)):
             logger.info(f"Preprocessing view {i+1}/{num_views}")
             
             # 将mask合并到图像的alpha通道（RGBA格式）
@@ -1384,9 +1560,34 @@ class InferencePipeline:
             # 调用preprocess_image（注意：InferencePipelinePointMap需要pointmap）
             # 先检查是否是InferencePipelinePointMap
             if hasattr(self, 'compute_pointmap'):
-                # 这是InferencePipelinePointMap，需要计算pointmap
-                pointmap_dict = self.compute_pointmap(rgba_image_pil, pointmap=None)
-                pointmap = pointmap_dict["pointmap"]
+                # 这是InferencePipelinePointMap，需要计算或使用外部pointmap
+                if ext_pointmap is not None:
+                    # 使用外部提供的 pointmap（来自 DA3 等）
+                    # ext_pointmap 格式: (3, H, W) numpy array
+                    # 
+                    # 重要：需要调用 compute_pointmap 来应用坐标变换！
+                    # compute_pointmap 会：
+                    #   1. 对 DA3 pointmap 翻转 Y 和 Z（使其与 MoGe 原始输出一致）
+                    #   2. 应用 camera_to_pytorch3d_camera 变换
+                    #   3. 返回 PyTorch3D 空间的 pointmap
+                    logger.info(f"  View {i+1}: Using external pointmap, shape={ext_pointmap.shape}")
+                    ext_pointmap_tensor = torch.from_numpy(ext_pointmap).float()
+                    pointmap_dict = self.compute_pointmap(rgba_image_pil, pointmap=ext_pointmap_tensor)
+                    pointmap = pointmap_dict["pointmap"]
+                else:
+                    # 用内置模型计算 pointmap
+                    pointmap_dict = self.compute_pointmap(rgba_image_pil, pointmap=None)
+                    pointmap = pointmap_dict["pointmap"]
+                
+                # 保存真实尺度的 pointmap（用于可视化对齐）
+                # 注意：此时 pointmap 已经在 PyTorch3D 空间，无论是 MoGe 还是 DA3
+                if pointmap is not None:
+                    pointmap_metric = pointmap.detach()
+                    if hasattr(type(self), "_down_sample_img"):
+                        pointmap_metric = type(self)._down_sample_img(pointmap_metric)
+                    pointmap_metric = pointmap_metric.cpu().permute(1, 2, 0)  # HxWx3
+                    raw_view_pointmaps.append(pointmap_metric.numpy())
+                
                 ss_input_dict = self.preprocess_image(
                     rgba_image_pil, self.ss_preprocessor, pointmap=pointmap
                 )
@@ -1395,6 +1596,8 @@ class InferencePipeline:
                 )
             else:
                 # 这是InferencePipeline，不需要pointmap
+                if ext_pointmap is not None:
+                    logger.warning(f"  View {i+1}: External pointmap provided but pipeline doesn't support it (not InferencePipelinePointMap)")
                 ss_input_dict = self.preprocess_image(
                     rgba_image_pil, self.ss_preprocessor
                 )
@@ -1415,7 +1618,30 @@ class InferencePipeline:
             attention_logger=attention_logger,
         )
         
-        ss_return_dict.update(self.pose_decoder(ss_return_dict))
+        # Get pointmap scale/shift from the first view for pose decoding
+        # These are needed to convert from normalized space to metric space
+        pointmap_scale = view_ss_input_dicts[0].get("pointmap_scale", None)
+        pointmap_shift = view_ss_input_dicts[0].get("pointmap_shift", None)
+        
+        ss_return_dict.update(self.pose_decoder(
+            ss_return_dict,
+            scene_scale=pointmap_scale,
+            scene_shift=pointmap_shift,
+        ))
+        
+        # Store pointmap_scale/shift for later use (e.g., alignment with DA3)
+        ss_return_dict["pointmap_scale"] = pointmap_scale
+        ss_return_dict["pointmap_shift"] = pointmap_shift
+        
+        # Decode poses for ALL views (not just the first one)
+        # This is useful for analyzing multi-view pose consistency
+        if "all_view_poses_raw" in ss_return_dict:
+            all_view_poses_decoded = self._decode_all_view_poses(
+                ss_return_dict["all_view_poses_raw"],
+                view_ss_input_dicts,
+            )
+            ss_return_dict["all_view_poses_decoded"] = all_view_poses_decoded
+            logger.info(f"[Multi-view] Decoded poses for {len(all_view_poses_decoded)} views")
         
         if "scale" in ss_return_dict:
             logger.info(f"Rescaling scale by {ss_return_dict['downsample_factor']}")
@@ -1441,6 +1667,8 @@ class InferencePipeline:
                 use_distillation=use_stage2_distillation,
                 attention_logger=attention_logger,
                 weighting_config=weighting_config,
+                save_stage2_init=save_stage2_init,
+                save_stage2_init_path=save_stage2_init_path,
             )
         else:
             # 使用原始的简单平均融合
@@ -1465,7 +1693,11 @@ class InferencePipeline:
         result = {
             **ss_return_dict,
             **outputs,
+            "view_ss_input_dicts": view_ss_input_dicts,  # 保存以便 overlay 使用
         }
+        
+        if raw_view_pointmaps:
+            result["raw_view_pointmaps"] = raw_view_pointmaps
         
         # 如果使用了加权融合，添加权重信息
         if weight_manager is not None:

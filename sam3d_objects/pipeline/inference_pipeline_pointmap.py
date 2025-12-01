@@ -258,16 +258,60 @@ class InferencePipelinePointMap(InferencePipeline):
             points_tensor = camera_convention_transform.transform_points(pointmaps)
             intrinsics = output.get("intrinsics", None)
         else:
+            # External pointmap provided (e.g., from DA3)
+            # Input format: (3, H, W)
+            # 
+            # 根据实际日志分析，DA3 和 MoGe 的原始 pointmap 坐标系是一致的：
+            # 
+            # DA3 原始输出 (run_da3.py 的 depth_to_pointmap):
+            #   - X: 右 (正)
+            #   - Y: 下 (正，但物体在图像中心偏上时为负)
+            #   - Z: 前 (正，远离相机)
+            # 
+            # MoGe 原始输出:
+            #   - X: 右 (正)
+            #   - Y: 下 (正，但物体在图像中心偏上时为负)
+            #   - Z: 前 (正，远离相机)
+            # 
+            # 两者都是标准相机坐标系，不需要额外的 Y/Z 翻转！
+            # 只需要应用 camera_to_pytorch3d: (x, y, z) -> (-x, -y, z)
+            
             output = {}
             points_tensor = pointmap.to(self.device)
-            if loaded_image.shape != points_tensor.shape:
-                # Interpolate points_tensor to match loaded_image size
-                # loaded_image has shape [3, H, W], we need H and W
+            
+            # Convert from (3, H, W) to (H, W, 3) for processing
+            if points_tensor.dim() == 3 and points_tensor.shape[0] == 3:
+                points_tensor = points_tensor.permute(1, 2, 0)  # (3, H, W) -> (H, W, 3)
+            
+            # Resize if needed (before coordinate transform)
+            # loaded_image is (3, H', W'), points_tensor is now (H, W, 3)
+            if (points_tensor.shape[0], points_tensor.shape[1]) != (loaded_image.shape[1], loaded_image.shape[2]):
                 points_tensor = torch.nn.functional.interpolate(
-                    points_tensor.permute(2, 0, 1).unsqueeze(0),
+                    points_tensor.permute(2, 0, 1).unsqueeze(0),  # (H, W, 3) -> (1, 3, H, W)
                     size=(loaded_image.shape[1], loaded_image.shape[2]),
                     mode="nearest",
-                ).squeeze(0).permute(1, 2, 0)
+                ).squeeze(0).permute(1, 2, 0)  # back to (H', W', 3)
+            
+            # 调试输出：DA3 原始 pointmap（标准相机坐标系）
+            logger.info(f"[External Pointmap] DA3 raw input (standard camera space):")
+            logger.info(f"  X: [{points_tensor[..., 0].min():.4f}, {points_tensor[..., 0].max():.4f}], mean={points_tensor[..., 0].mean():.4f}")
+            logger.info(f"  Y: [{points_tensor[..., 1].min():.4f}, {points_tensor[..., 1].max():.4f}], mean={points_tensor[..., 1].mean():.4f}")
+            logger.info(f"  Z: [{points_tensor[..., 2].min():.4f}, {points_tensor[..., 2].max():.4f}], mean={points_tensor[..., 2].mean():.4f}")
+            
+            # 应用与 MoGe 相同的变换: (x, y, z) -> (-x, -y, z)
+            # 这是从标准相机坐标系到 PyTorch3D 相机坐标系的变换
+            camera_convention_transform = (
+                Transform3d()
+                .rotate(camera_to_pytorch3d_camera(device=self.device).rotation)
+                .to(self.device)
+            )
+            points_tensor = camera_convention_transform.transform_points(points_tensor)
+            
+            logger.info(f"[External Pointmap] After camera_to_pytorch3d (-x, -y, z):")
+            logger.info(f"  X: [{points_tensor[..., 0].min():.4f}, {points_tensor[..., 0].max():.4f}], mean={points_tensor[..., 0].mean():.4f}")
+            logger.info(f"  Y: [{points_tensor[..., 1].min():.4f}, {points_tensor[..., 1].max():.4f}], mean={points_tensor[..., 1].mean():.4f}")
+            logger.info(f"  Z: [{points_tensor[..., 2].min():.4f}, {points_tensor[..., 2].max():.4f}], mean={points_tensor[..., 2].mean():.4f}")
+            
             intrinsics = None
 
         points_tensor = points_tensor.permute(2, 0, 1)
