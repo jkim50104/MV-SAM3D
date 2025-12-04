@@ -667,19 +667,19 @@ class InferencePipeline:
         mask: Union[None, np.ndarray, Image.Image],
     ):
         """
-        将 mask 合并到 image 的 alpha 通道上（RGBA），
-        单视角路径下与多视角的处理逻辑保持一致，避免因为 dtype/取值范围不同导致 mask 失效。
+        Merge mask into image's alpha channel (RGBA),
+        Keep single-view path consistent with multi-view processing to avoid mask issues due to dtype/range differences.
         """
         if isinstance(image, Image.Image):
             image = np.array(image)
 
         if mask is not None:
             mask = np.array(mask)
-            # 与 multi-view 路径保持一致的 dtype 处理
+            # Keep dtype handling consistent with multi-view path
             if mask.dtype == bool:
                 mask = mask.astype(np.uint8) * 255
             elif mask.dtype != np.uint8:
-                # 如果是 0-1 浮点或其他低范围值，先拉伸到 0-255 再转 uint8
+                # If 0-1 float or other low-range values, stretch to 0-255 first then convert to uint8
                 if mask.max() <= 1.0:
                     mask = (mask * 255).astype(np.uint8)
                 else:
@@ -691,7 +691,7 @@ class InferencePipeline:
             logger.info(f"Replacing alpha channel with the provided mask")
             assert mask.shape[:2] == image.shape[:2]
 
-            # 支持 RGB 或已有 RGBA，两种情况都和 multi-view 保持一致
+            # Support RGB or existing RGBA, both cases consistent with multi-view
             if image.shape[-1] == 3:
                 image = np.concatenate([image[..., :3], mask], axis=-1).astype(np.uint8)
             elif image.shape[-1] == 4:
@@ -699,7 +699,7 @@ class InferencePipeline:
             else:
                 raise ValueError(f"Unexpected image shape: {image.shape}")
 
-        # 保证最终是 numpy 数组
+        # Ensure final result is numpy array
         image = np.array(image)
         return image
 
@@ -968,18 +968,18 @@ class InferencePipeline:
         input_mapping
     ):
         """
-        为多视角输入准备条件
+        Prepare conditions for multi-view input
         
         Args:
-            condition_embedder: 条件嵌入器
-            view_input_dicts: 每个视角的输入字典列表
-            input_mapping: 输入映射
+            condition_embedder: Condition embedder
+            view_input_dicts: List of input dicts for each view
+            input_mapping: Input mapping
             
         Returns:
-            condition_args: 条件参数（包含所有视角的条件tokens）
-            condition_kwargs: 条件关键字参数
+            condition_args: Condition args (containing condition tokens for all views)
+            condition_kwargs: Condition keyword args
         """
-        # 对每个视角分别提取条件
+        # Extract conditions for each view separately
         view_conditions = []
         for view_input_dict in view_input_dicts:
             condition_args = self.map_input_keys(view_input_dict, input_mapping)
@@ -992,16 +992,16 @@ class InferencePipeline:
             if embedded_cond is not None:
                 view_conditions.append(embedded_cond)
             else:
-                # 如果没有嵌入，使用原始参数
+                # If no embedding, use original args
                 view_conditions.append(condition_args)
         
-        # 将所有视角的条件堆叠在一起
-        # 形状: (num_views, batch_size, num_tokens, dim)
+        # Stack conditions from all views together
+        # Shape: (num_views, batch_size, num_tokens, dim)
         if isinstance(view_conditions[0], torch.Tensor):
-            # 如果是tensor，堆叠
+            # If tensor, stack
             all_conditions = torch.stack(view_conditions, dim=0)
         else:
-            # 如果是其他类型，保持为列表
+            # If other type, keep as list
             all_conditions = view_conditions
         
         return (all_conditions,), {}
@@ -1016,16 +1016,16 @@ class InferencePipeline:
         optimize_per_view_pose: bool = False,
     ):
         """
-        多视角稀疏结构生成
+        Multi-view sparse structure generation
         
         Args:
-            view_ss_input_dicts: 每个视角的输入字典列表
-            inference_steps: 推理步数
-            use_distillation: 是否使用蒸馏
-            mode: 'stochastic' 或 'multidiffusion'
-            optimize_per_view_pose: 是否为每个视角独立优化 pose
-                - False (默认): Shape 平均更新，Pose 只用 View 0
-                - True: Shape 平均更新，每个视角独立迭代自己的 Pose
+            view_ss_input_dicts: List of input dicts for each view
+            inference_steps: Number of inference steps
+            use_distillation: Whether to use distillation
+            mode: 'stochastic' or 'multidiffusion'
+            optimize_per_view_pose: Whether to optimize pose independently for each view
+                - False (default): Shape averaged, Pose only from View 0
+                - True: Shape averaged, each view iterates its own Pose independently
         """
         from sam3d_objects.pipeline.multi_view_utils import inject_generator_multi_view
         
@@ -1069,14 +1069,14 @@ class InferencePipeline:
                     latent_shape_dict = (bs,) + (4096, 8)
                     logger.info(f"[Stage 1] Latent shape: {latent_shape_dict}")
 
-                # 准备多视角条件
+                # Prepare multi-view conditions
                 condition_args, condition_kwargs = self.get_multi_view_condition_input(
                     self.condition_embedders["ss_condition_embedder"],
                     view_ss_input_dicts,
                     self.ss_condition_input_mapping,
                 )
                 
-                # 注入多视角支持
+                # Inject multi-view support
                 with inject_generator_multi_view(
                     ss_generator, 
                     num_views=num_views, 
@@ -1095,13 +1095,13 @@ class InferencePipeline:
                 if not self.is_mm_dit():
                     return_dict = {"shape": return_dict}
                 
-                # 如果开启了 per-view pose 优化，提取每个视角的 pose
+                # If per-view pose optimization enabled, extract pose for each view
                 if optimize_per_view_pose and all_view_poses_storage is not None and all_view_poses_storage.get('per_view_x_t'):
                     per_view_x_t = all_view_poses_storage['per_view_x_t']
                     
                     from sam3d_objects.pipeline.multi_view_utils import POSE_KEYS
                     
-                    # 提取每个视角的 pose 部分
+                    # Extract pose part for each view
                     all_view_poses_raw = {}
                     for key in per_view_x_t[0].keys():
                         if key in POSE_KEYS:
@@ -1111,9 +1111,9 @@ class InferencePipeline:
                     return_dict["all_view_poses_raw"] = all_view_poses_raw
                     logger.info(f"[Stage 1] Per-view pose optimization: saved {num_views} views' poses")
                     
-                    # 重要：用 View 0 独立迭代的 pose 覆盖 return_dict 中的 pose
-                    # 因为 solver 的 x_t 和 per_view_x_t[0] 可能不同步
-                    # （solver 用的是返回的 fused velocity，而 per_view_x_t[0] 是我们自己维护的）
+                    # Important: Override return_dict pose with View 0 independently iterated pose
+                    # Because solver's x_t and per_view_x_t[0] may be out of sync
+                    # (solver uses returned fused velocity, while per_view_x_t[0] is maintained by us)
                     for key in per_view_x_t[0].keys():
                         if key in POSE_KEYS:
                             return_dict[key] = per_view_x_t[0][key]
@@ -1155,17 +1155,17 @@ class InferencePipeline:
         inference_steps: int = 50,
     ) -> List[dict]:
         """
-        阶段 2：固定 shape，为每个视角单独优化 pose。
+        Phase 2: Fix shape, optimize pose independently for each view.
         
-        这个函数用于估计相机位姿：
-        1. 假设物体在世界坐标系中是静止的
-        2. 每个视角看到的物体 pose 不同，是因为相机位置不同
-        3. 通过比较不同视角的 pose，可以推算相机位姿
+        This function is used for camera pose estimation:
+        1. Assume object is stationary in world coordinates
+        2. Different views see different object poses because camera positions differ
+        3. Camera poses can be estimated by comparing poses from different views
         
         Args:
-            view_ss_input_dicts: 每个视角的输入字典列表
-            fixed_shape_latent: 固定的 shape latent（来自阶段 1）
-            inference_steps: 迭代步数
+            view_ss_input_dicts: List of input dicts for each view
+            fixed_shape_latent: Fixed shape latent (from phase 1)
+            inference_steps: Number of iteration steps
             
         Returns:
             List of raw pose dicts for each view (before decoding)
@@ -1178,11 +1178,11 @@ class InferencePipeline:
         logger.info(f"[Pose Refinement] Refining pose for {num_views} views with {inference_steps} steps")
         logger.info(f"[Pose Refinement] Fixed shape latent shape: {fixed_shape_latent.shape}")
         
-        # 保存原始设置
+        # Save original settings
         prev_inference_steps = ss_generator.inference_steps
         ss_generator.inference_steps = inference_steps
         
-        # 确保使用正确的 CFG 设置
+        # Ensure correct CFG settings
         ss_generator.no_shortcut = True
         ss_generator.reverse_fn.strength = self.ss_cfg_strength
         ss_generator.reverse_fn.strength_pm = self.ss_cfg_strength_pm
@@ -1194,7 +1194,7 @@ class InferencePipeline:
                 for view_idx in range(num_views):
                     logger.info(f"[Pose Refinement] Processing view {view_idx}/{num_views-1}")
                     
-                    # 准备单视角条件
+                    # Prepare single-view conditions
                     view_input = view_ss_input_dicts[view_idx]
                     condition_args, condition_kwargs = self.get_condition_input(
                         self.condition_embedders["ss_condition_embedder"],
@@ -1202,7 +1202,7 @@ class InferencePipeline:
                         self.ss_condition_input_mapping,
                     )
                     
-                    # 获取 latent shape（用于初始化 pose noise）
+                    # Get latent shape (for initializing pose noise)
                     image = view_input["image"]
                     bs = image.shape[0]
                     device = image.device
@@ -1215,28 +1215,28 @@ class InferencePipeline:
                     else:
                         latent_shape_dict = (bs,) + (4096, 8)
                     
-                    # 手动进行 flow matching 迭代，固定 shape
-                    # 初始化 x_t
+                    # Manually do flow matching iteration, fix shape
+                    # Initialize x_t
                     if isinstance(latent_shape_dict, dict):
                         x_t = {
                             k: torch.randn(v, device=device)
                             for k, v in latent_shape_dict.items()
                         }
-                        # 替换 shape 为固定值
+                        # Replace shape with fixed value
                         x_t['shape'] = fixed_shape_latent.clone().to(device)
                     else:
                         x_t = torch.randn(latent_shape_dict, device=device)
                     
-                    # 准备时间步
+                    # Prepare timesteps
                     t_seq = torch.linspace(0, 1, inference_steps + 1).to(device)
                     dt = 1.0 / inference_steps
                     
-                    # 迭代
+                    # Iterate
                     for step_idx in range(inference_steps):
                         t = t_seq[step_idx]
                         t_scaled = t * ss_generator.time_scale
                         
-                        # 获取 velocity
+                        # Get velocity
                         velocity = ss_generator.reverse_fn(
                             x_t, 
                             t_scaled.unsqueeze(0) if t_scaled.dim() == 0 else t_scaled,
@@ -1244,17 +1244,17 @@ class InferencePipeline:
                             **condition_kwargs
                         )
                         
-                        # 更新 x_t
+                        # Update x_t
                         if isinstance(velocity, dict):
                             for key in velocity.keys():
                                 if key in POSE_KEYS:
-                                    # 只更新 pose
+                                    # Only update pose
                                     x_t[key] = x_t[key] + velocity[key] * dt
                                 # shape 保持不变（不更新）
                         else:
                             x_t = x_t + velocity * dt
                     
-                    # 提取最终的 pose
+                    # 提取finally的 pose
                     view_pose_raw = {}
                     if isinstance(x_t, dict):
                         for key in x_t.keys():
@@ -1263,13 +1263,13 @@ class InferencePipeline:
                     
                     all_view_poses_raw.append(view_pose_raw)
                     
-                    # 打印调试信息
+                    # 打印debuginfo
                     if 'scale' in view_pose_raw:
                         logger.info(f"  View {view_idx} raw scale: {view_pose_raw['scale'].flatten()[:3]}")
                     if 'translation' in view_pose_raw:
                         logger.info(f"  View {view_idx} raw translation: {view_pose_raw['translation'].flatten()[:3]}")
         
-        # 恢复原始设置
+        # restoreoriginal设置
         ss_generator.inference_steps = prev_inference_steps
         
         logger.info(f"[Pose Refinement] Completed for {num_views} views")
@@ -1282,20 +1282,20 @@ class InferencePipeline:
         inference_steps: int = 50,
     ) -> List[dict]:
         """
-        每个视角完全独立地从 noise 优化 shape + pose。
+        each view完全独立地从 noise 优化 shape + pose。
         
         这是 refine_pose_per_view 的变体，用于对比实验：
-        - refine_pose_per_view: 固定多视角融合的 shape，只优化 pose
-        - estimate_pose_independent: 每个视角独立优化 shape + pose，只取 pose
+        - refine_pose_per_view: 固定multi-view fusion的 shape，只优化 pose
+        - estimate_pose_independent: each view独立优化 shape + pose，只取 pose
         
-        理论上，如果模型的 pose 预测是准确的，这两种方法应该得到相似的结果。
+        theoretical上，如果模型的 pose 预测是准确的，这两种方法should得到相似result。
         如果结果差异很大，说明：
         1. 固定 shape 时 pose 预测不准确（方法 A 的问题）
-        2. 或者单视角 pose 预测本身就不一致（思路本身的问题）
+        2. or单视角 pose 预测本身就不一致（思路本身的问题）
         
         Args:
-            view_ss_input_dicts: 每个视角的输入字典列表
-            inference_steps: 迭代步数
+            view_ss_input_dicts: List of input dicts for each view
+            inference_steps: Number of iteration steps
             
         Returns:
             List of raw pose dicts for each view (before decoding)
@@ -1309,11 +1309,11 @@ class InferencePipeline:
         logger.info(f"[Independent Pose] Estimating pose independently for {num_views} views")
         logger.info(f"[Independent Pose] Inference steps: {inference_steps}")
         
-        # 保存原始设置
+        # Save original settings
         prev_inference_steps = ss_generator.inference_steps
         ss_generator.inference_steps = inference_steps
         
-        # 确保使用正确的 CFG 设置
+        # Ensure correct CFG settings
         ss_generator.no_shortcut = True
         ss_generator.reverse_fn.strength = self.ss_cfg_strength
         ss_generator.reverse_fn.strength_pm = self.ss_cfg_strength_pm
@@ -1326,10 +1326,10 @@ class InferencePipeline:
                 for view_idx in range(num_views):
                     logger.info(f"[Independent Pose] Processing view {view_idx}/{num_views-1}")
                     
-                    # 准备单视角条件
+                    # Prepare single-view conditions
                     view_input = view_ss_input_dicts[view_idx]
                     
-                    # 调试：打印每个视角的 condition 信息
+                    # Debug：打印each view的 condition info
                     if 'pointmap' in view_input:
                         pm = view_input['pointmap']
                         logger.info(f"  View {view_idx} pointmap shape: {pm.shape}, "
@@ -1346,7 +1346,7 @@ class InferencePipeline:
                         self.ss_condition_input_mapping,
                     )
                     
-                    # 获取 latent shape
+                    # Get latent shape
                     image = view_input["image"]
                     bs = image.shape[0]
                     device = image.device
@@ -1359,7 +1359,7 @@ class InferencePipeline:
                     else:
                         latent_shape_dict = (bs,) + (4096, 8)
                     
-                    # 使用标准的 flow matching 生成（shape + pose 一起优化）
+                    # Use标准的 flow matching 生成（shape + pose 一起优化）
                     result = ss_generator(
                         latent_shape_dict,
                         device,
@@ -1378,20 +1378,20 @@ class InferencePipeline:
                     
                     all_view_poses_raw.append(view_pose_raw)
                     
-                    # 保存 shape 用于分析
+                    # Save shape 用于分析
                     if 'shape' in result:
                         all_view_shapes.append(result['shape'].detach().cpu())
                     
-                    # 打印调试信息
+                    # 打印debuginfo
                     if 'scale' in view_pose_raw:
                         logger.info(f"  View {view_idx} raw scale: {view_pose_raw['scale'].flatten()[:3]}")
                     if 'translation' in view_pose_raw:
                         logger.info(f"  View {view_idx} raw translation: {view_pose_raw['translation'].flatten()[:3]}")
         
-        # 恢复原始设置
+        # restoreoriginal设置
         ss_generator.inference_steps = prev_inference_steps
         
-        # 分析不同视角的 shape 差异
+        # 分析differentview's shape 差异
         if len(all_view_shapes) > 1:
             shapes_stacked = torch.stack(all_view_shapes)
             shape_std = shapes_stacked.std(dim=0).mean().item()
@@ -1415,11 +1415,11 @@ class InferencePipeline:
         多视角结构化潜在生成
         
         Args:
-            view_slat_input_dicts: 每个视角的输入字典列表
+            view_slat_input_dicts: each view的输入字典列表
             coords: 坐标（从Stage 1得到）
-            inference_steps: 推理步数
-            use_distillation: 是否使用蒸馏
-            mode: 'stochastic' 或 'multidiffusion'
+            inference_steps: Number of inference steps
+            use_distillation: Whether to use distillation
+            mode: 'stochastic' or 'multidiffusion'
         """
         from sam3d_objects.pipeline.multi_view_utils import inject_generator_multi_view
         
@@ -1451,7 +1451,7 @@ class InferencePipeline:
 
         with torch.autocast(device_type="cuda", dtype=self.dtype):
             with torch.no_grad():
-                # 准备多视角条件
+                # Prepare multi-view conditions
                 condition_args, condition_kwargs = self.get_multi_view_condition_input(
                     self.condition_embedders["slat_condition_embedder"],
                     view_slat_input_dicts,
@@ -1459,7 +1459,7 @@ class InferencePipeline:
                 )
                 condition_args += (coords.cpu().numpy(),)
                 
-                # 注入多视角支持
+                # Inject multi-view support
                 with inject_generator_multi_view(
                     slat_generator,
                     num_views=num_views,
@@ -1497,16 +1497,16 @@ class InferencePipeline:
         多视角结构化潜在生成（带加权融合，两阶段方法）
         
         流程：
-        1. Warmup Pass: 跑一个 step 收集 attention，计算权重
-        2. Main Pass: 用计算出的权重，从头开始完整迭代
+        1. Warmup Pass: 跑one step 收集 attention，compute weights
+        2. Main Pass: 用计算出的权重，从头start完整迭代
         
         Args:
-            view_slat_input_dicts: 每个视角的输入字典列表
+            view_slat_input_dicts: each view的输入字典列表
             coords: 坐标（从Stage 1得到）
-            inference_steps: 推理步数
-            use_distillation: 是否使用蒸馏
+            inference_steps: Number of inference steps
+            use_distillation: Whether to use distillation
             attention_logger: 注意力记录器
-            weighting_config: 加权配置
+            weighting_config: 加权config
             save_stage2_init: 是否保存 Stage 2 初始 latent
             save_stage2_init_path: 保存路径
         """
@@ -1536,14 +1536,14 @@ class InferencePipeline:
             slat_generator.no_shortcut = True
             slat_generator.reverse_fn.strength = self.slat_cfg_strength
 
-        # 创建权重管理器
+        # Createweight manager
         if weighting_config is None:
             weighting_config = WeightingConfig()
         weight_manager = LatentWeightManager(weighting_config)
 
         with torch.autocast(device_type="cuda", dtype=self.dtype):
             with torch.no_grad():
-                # 准备多视角条件
+                # Prepare multi-view conditions
                 condition_args, condition_kwargs = self.get_multi_view_condition_input(
                     self.condition_embedders["slat_condition_embedder"],
                     view_slat_input_dicts,
@@ -1563,13 +1563,13 @@ class InferencePipeline:
                     attention_logger.set_num_views(num_views)
                     attention_logger.set_view(0)
                 
-                # 创建一个临时的 attention 收集器
+                # Createone临时的 attention 收集器
                 attention_collector = AttentionCollector(
                     num_views=num_views,
                     target_layer=weighting_config.attention_layer,
                 )
                 
-                # 用简单平均跑一步，同时收集 attention 到内存
+                # 用simple average跑一步，同时收集 attention 到内存
                 with inject_generator_multi_view_with_collector(
                     slat_generator,
                     num_views=num_views,
@@ -1581,14 +1581,14 @@ class InferencePipeline:
                         latent_shape, DEVICE, *condition_args, **condition_kwargs
                     )
                 
-                # 从内存中的 attention 计算权重
+                # 从内存中的 attention compute weights
                 collected_attentions = attention_collector.get_attentions()
                 if collected_attentions:
                     for view_idx, attn in collected_attentions.items():
                         weight_manager.add_view_attention(view_idx, attn, step=0)
                     logger.info(f"[Stage 2 Weighted] Collected attention for {len(collected_attentions)} views")
                 
-                # 设置 downsample 映射（用于将权重从降采样维度扩展到原始维度）
+                # Set downsample 映射（用于将权重从downsample维度expand tooriginal维度）
                 downsample_idx = attention_collector.get_downsample_idx()
                 original_coords = attention_collector.get_original_coords()
                 downsampled_coords = attention_collector.get_downsampled_coords()
@@ -1603,7 +1603,41 @@ class InferencePipeline:
                 else:
                     logger.warning("[Stage 2 Weighted] No downsample mapping found!")
                 
-                # 计算降采样维度的权重
+                # Ifneed visibility，调用相应的 callback 计算
+                if weighting_config.weight_source in ["visibility", "mixed"]:
+                    if weighting_config.visibility_callback is not None:
+                        if downsampled_coords is not None:
+                            logger.info(f"[Stage 2 Weighted] Computing visibility for {num_views} views on {downsampled_coords.shape[0]} downsampled coords...")
+                            # Convert to numpy for visibility computation
+                            coords_np = downsampled_coords.cpu().numpy() if hasattr(downsampled_coords, 'cpu') else downsampled_coords
+                            # Get object pose (set by run_multi_view after Stage 1)
+                            object_pose = weighting_config.object_pose
+                            if object_pose is None:
+                                logger.warning("[Stage 2 Weighted] object_pose not set! Visibility computation may fail.")
+                            try:
+                                visibility_matrix = weighting_config.visibility_callback(coords_np, num_views, object_pose)
+                                # Convert to torch tensor
+                                if not isinstance(visibility_matrix, torch.Tensor):
+                                    visibility_matrix = torch.from_numpy(visibility_matrix).float()
+                                weight_manager.set_visibility_matrix(visibility_matrix)
+                                logger.info(f"[Stage 2 Weighted] Visibility matrix set: shape={visibility_matrix.shape}")
+                            except Exception as e:
+                                logger.error(f"[Stage 2 Weighted] Visibility callback failed: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                if weighting_config.weight_source == "visibility":
+                                    raise  # Re-raise for visibility-only mode
+                                else:
+                                    logger.warning("[Stage 2 Weighted] Falling back to entropy-only weights")
+                        else:
+                            logger.warning("[Stage 2 Weighted] No downsampled coords available for visibility computation!")
+                    else:
+                        logger.warning(
+                            f"[Stage 2 Weighted] weight_source={weighting_config.weight_source} requires visibility_callback, "
+                            "but none provided! Falling back to entropy-only if available."
+                        )
+                
+                # Computedownsample维度的权重
                 weights_downsampled = weight_manager.compute_weights()
                 
                 if weights_downsampled and len(weights_downsampled) == num_views:
@@ -1611,7 +1645,7 @@ class InferencePipeline:
                     for v, w in weights_downsampled.items():
                         logger.info(f"  View {v} (downsampled): mean={w.mean():.4f}, std={w.std():.4f}")
                     
-                    # 扩展权重到原始维度
+                    # 扩展权重到original维度
                     weights_expanded = weight_manager.get_expanded_weights()
                     if weights_expanded:
                         logger.info(f"[Stage 2 Weighted] Expanded weights to original dimension")
@@ -1624,33 +1658,33 @@ class InferencePipeline:
                 # ============ Phase 2: Main Pass (full steps with weights) ============
                 logger.info(f"[Stage 2 Weighted] Phase 2: Main pass with {original_steps} steps...")
                 
-                # 恢复完整步数
+                # restore完整步数
                 slat_generator.inference_steps = original_steps
                 
-                # 重新开始 attention logger（如果需要保存完整的 attention）
+                # 重新start attention logger（如果need保存完整的 attention）
                 if attention_logger is not None:
                     attention_logger.start_stage("slat")
                     attention_logger.set_num_views(num_views)
                 
-                # 生成初始噪声（用于保存和迭代）
+                # Generate初始噪声（用于保存和迭代）
                 initial_noise = slat_generator._generate_noise(latent_shape, DEVICE)
                 
-                # 保存 Stage 2 初始 latent（如果需要）
+                # Save Stage 2 初始 latent（如果need）
                 if save_stage2_init and save_stage2_init_path is not None:
                     logger.info(f"[Stage 2 Weighted] Saving Stage 2 initial latent to {save_stage2_init_path}")
-                    # 保存所有需要的信息
+                    # Save所有need的info
                     stage2_init_data = {
                         "coords": coords.cpu(),
                         "initial_noise": initial_noise.cpu() if torch.is_tensor(initial_noise) else initial_noise,
                         "latent_shape": latent_shape,
                         "num_views": num_views,
                         "inference_steps": original_steps,
-                        # 保存条件编码（已经 embed 过的）
+                        # Save条件编码（already embed 过的）
                         "condition_args": tuple(
                             arg.cpu() if torch.is_tensor(arg) else arg 
                             for arg in condition_args[:-1]  # 排除 coords numpy
                         ),
-                        # 保存配置
+                        # Saveconfig
                         "slat_cfg_strength": self.slat_cfg_strength,
                         "use_distillation": use_distillation,
                     }
@@ -1669,14 +1703,14 @@ class InferencePipeline:
                         slat_generator,
                         num_views=num_views,
                         num_steps=original_steps,
-                        precomputed_weights=weights_expanded,  # 使用扩展后的权重
+                        precomputed_weights=weights_expanded,  # Use扩展后的权重
                         attention_logger=attention_logger,
                     ):
                         slat = slat_generator(
                             latent_shape, DEVICE, *condition_args, **condition_kwargs
                         )
                 finally:
-                    # 恢复原始的 _generate_noise 方法
+                    # restoreoriginal的 _generate_noise 方法
                     slat_generator._generate_noise = original_generate_noise
                 
                 logger.info(f"[Stage 2 Weighted] Generated slat shape: {slat[0].shape if isinstance(slat, (list, tuple)) else slat.shape}")
@@ -1708,21 +1742,21 @@ class InferencePipeline:
         stage1_only: bool = False,
         mode: Literal['stochastic', 'multidiffusion'] = 'multidiffusion',
         attention_logger: Optional[Any] = None,
-        weighting_config: Optional[Any] = None,  # 加权配置
+        weighting_config: Optional[Any] = None,  # 加权config
         save_stage2_init: bool = False,  # 是否保存 Stage 2 初始 latent
-        save_stage2_init_path: Optional[Any] = None,  # 保存路径
-        optimize_per_view_pose: bool = False,  # 是否为每个视角独立优化 pose
+        save_stage2_init_path: Optional[Any] = None,  # Save路径
+        optimize_per_view_pose: bool = False,  # 是否为each view独立优化 pose
     ) -> dict:
         """
         多视角推理主函数
         
         Args:
-            view_images: 每个视角的图像列表
-            view_masks: 每个视角的掩码列表（可选）
-            view_pointmaps: 每个视角的外部 pointmap 列表（可选）
+            view_images: each view的图像列表
+            view_masks: each view的掩码列表（可选）
+            view_pointmaps: each view的外部 pointmap 列表（可选）
                 - 格式: (3, H, W) 的 numpy array，PyTorch3D 坐标系
                 - 如果提供，将使用外部 pointmap 而不是内置深度模型计算
-                - 可以来自 DA3 等外部深度估计模型
+                - can来自 DA3 等外部深度估计模型
             num_samples: 生成样本数
             seed: 随机种子
             stage1_inference_steps: Stage 1推理步数
@@ -1734,17 +1768,17 @@ class InferencePipeline:
             with_texture_baking: 是否进行纹理烘焙
             use_vertex_color: 是否使用顶点颜色
             stage1_only: 是否只运行Stage 1
-            mode: 'stochastic' 或 'multidiffusion'
-            optimize_per_view_pose: 是否为每个视角独立优化 pose
+            mode: 'stochastic' or 'multidiffusion'
+            optimize_per_view_pose: Whether to optimize pose independently for each view
                 - False (默认): Pose 只用 View 0 的 velocity 更新
-                - True: 每个视角独立迭代自己的 Pose（用于多视角一致性分析）
+                - True: each view独立迭代自己的 Pose（用于多视角一致性分析）
         """
         num_views = len(view_images)
         if view_masks is None:
             view_masks = [None] * num_views
         assert len(view_masks) == num_views, "Number of masks must match number of images"
         
-        # 处理外部 pointmap
+        # Process外部 pointmap
         if view_pointmaps is not None:
             assert len(view_pointmaps) == num_views, "Number of pointmaps must match number of images"
             logger.info(f"Using external pointmaps for {sum(1 for p in view_pointmaps if p is not None)}/{num_views} views")
@@ -1756,8 +1790,8 @@ class InferencePipeline:
         
         logger.info(f"Running multi-view inference with {num_views} views, mode={mode}")
         
-        # 预处理每个视角
-        # 注意：需要先将mask合并到图像的alpha通道，然后调用preprocess_image
+        # 预处理each view
+        # Note：need先将mask合并到图像的alpha通道，then调用preprocess_image
         view_ss_input_dicts = []
         view_slat_input_dicts = []
         raw_view_pointmaps: List[np.ndarray] = []
@@ -1765,7 +1799,7 @@ class InferencePipeline:
             logger.info(f"Preprocessing view {i+1}/{num_views}")
             
             # 将mask合并到图像的alpha通道（RGBA格式）
-            # 如果image已经是RGBA格式（从mask的alpha通道加载），mask可能是None
+            # Ifimagealready是RGBA格式（从mask的alpha通道加载），maskpossible是None
             if mask is not None:
                 # 确保image是numpy数组
                 if isinstance(image, Image.Image):
@@ -1776,11 +1810,11 @@ class InferencePipeline:
                 # 确保mask是numpy数组
                 mask = np.array(mask)
                 
-                # 如果mask是bool类型，转换为uint8
+                # Ifmask是bool类型，转换为uint8
                 if mask.dtype == bool:
                     mask = mask.astype(np.uint8) * 255
                 elif mask.dtype != np.uint8:
-                    # 如果mask是0-1范围的float，转换为0-255
+                    # Ifmask是0-1范围的float，转换为0-255
                     if mask.max() <= 1.0:
                         mask = (mask * 255).astype(np.uint8)
                     else:
@@ -1792,31 +1826,31 @@ class InferencePipeline:
                 # 合并mask到alpha通道
                 if image.shape[-1] == 3:  # RGB
                     rgba_image = np.concatenate([image, mask], axis=-1).astype(np.uint8)
-                elif image.shape[-1] == 4:  # 已经是RGBA，替换alpha通道
+                elif image.shape[-1] == 4:  # already是RGBA，替换alpha通道
                     rgba_image = np.concatenate([image[..., :3], mask], axis=-1).astype(np.uint8)
                 else:
                     raise ValueError(f"Unexpected image shape: {image.shape}")
             else:
-                # 如果没有mask，假设image已经是RGBA格式
+                # If没有mask，假设imagealready是RGBA格式
                 if isinstance(image, Image.Image):
                     rgba_image = np.array(image)
                 else:
                     rgba_image = np.array(image)
             
-            # 转换为PIL Image（preprocess_image需要）
+            # Convert为PIL Image（preprocess_imageneed）
             rgba_image_pil = Image.fromarray(rgba_image)
             
-            # 调用preprocess_image（注意：InferencePipelinePointMap需要pointmap）
+            # 调用preprocess_image（注意：InferencePipelinePointMapneedpointmap）
             # 先检查是否是InferencePipelinePointMap
             if hasattr(self, 'compute_pointmap'):
-                # 这是InferencePipelinePointMap，需要计算或使用外部pointmap
+                # 这是InferencePipelinePointMap，need计算或使用外部pointmap
                 if ext_pointmap is not None:
-                    # 使用外部提供的 pointmap（来自 DA3 等）
+                    # Use外部提供的 pointmap（来自 DA3 等）
                     # ext_pointmap 格式: (3, H, W) numpy array
                     # 
-                    # 重要：需要调用 compute_pointmap 来应用坐标变换！
+                    # 重要：need调用 compute_pointmap 来应用坐标变换！
                     # compute_pointmap 会：
-                    #   1. 对 DA3 pointmap 翻转 Y 和 Z（使其与 MoGe 原始输出一致）
+                    #   1. 对 DA3 pointmap 翻转 Y 和 Z（使其与 MoGe original输出一致）
                     #   2. 应用 camera_to_pytorch3d_camera 变换
                     #   3. 返回 PyTorch3D 空间的 pointmap
                     logger.info(f"  View {i+1}: Using external pointmap, shape={ext_pointmap.shape}")
@@ -1828,8 +1862,8 @@ class InferencePipeline:
                     pointmap_dict = self.compute_pointmap(rgba_image_pil, pointmap=None)
                     pointmap = pointmap_dict["pointmap"]
                 
-                # 保存真实尺度的 pointmap（用于可视化对齐）
-                # 注意：此时 pointmap 已经在 PyTorch3D 空间，无论是 MoGe 还是 DA3
+                # Save真实尺度的 pointmap（用于visualization对齐）
+                # Note：此时 pointmap already在 PyTorch3D 空间，无论是 MoGe 还是 DA3
                 if pointmap is not None:
                     pointmap_metric = pointmap.detach()
                     if hasattr(type(self), "_down_sample_img"):
@@ -1844,7 +1878,7 @@ class InferencePipeline:
                     rgba_image_pil, self.slat_preprocessor
                 )
             else:
-                # 这是InferencePipeline，不需要pointmap
+                # 这是InferencePipeline，不needpointmap
                 if ext_pointmap is not None:
                     logger.warning(f"  View {i+1}: External pointmap provided but pipeline doesn't support it (not InferencePipelinePointMap)")
                 ss_input_dict = self.preprocess_image(
@@ -1908,8 +1942,21 @@ class InferencePipeline:
         
         weight_manager = None
         if weighting_config is not None:
-            # 使用加权融合
+            # Use加权融合
             logger.info("Using weighted multi-view fusion")
+            
+            # Set object pose for visibility computation (if needed)
+            if weighting_config.weight_source in ["visibility", "mixed"]:
+                if weighting_config.visibility_callback is not None:
+                    # Extract object pose from Stage 1 results
+                    object_pose = {
+                        'scale': ss_return_dict.get('scale'),
+                        'rotation': ss_return_dict.get('rotation'),
+                        'translation': ss_return_dict.get('translation'),
+                    }
+                    weighting_config.object_pose = object_pose
+                    logger.info(f"[Stage 2] Set object pose for visibility: scale={object_pose['scale']}")
+            
             slat, weight_manager = self.sample_slat_multi_view_weighted(
                 view_slat_input_dicts,
                 coords,
@@ -1921,7 +1968,7 @@ class InferencePipeline:
                 save_stage2_init_path=save_stage2_init_path,
             )
         else:
-            # 使用原始的简单平均融合
+            # Useoriginal的simple average融合
             slat = self.sample_slat_multi_view(
                 view_slat_input_dicts,
                 coords,
@@ -1931,7 +1978,7 @@ class InferencePipeline:
                 attention_logger=attention_logger,
             )
         
-        # 解码
+        # Decode
         outputs = self.decode_slat(
             slat, self.decode_formats if decode_formats is None else decode_formats
         )
@@ -1943,14 +1990,378 @@ class InferencePipeline:
         result = {
             **ss_return_dict,
             **outputs,
-            "view_ss_input_dicts": view_ss_input_dicts,  # 保存以便 overlay 使用
+            "view_ss_input_dicts": view_ss_input_dicts,  # Save以便 overlay 使用
         }
         
         if raw_view_pointmaps:
             result["raw_view_pointmaps"] = raw_view_pointmaps
         
-        # 如果使用了加权融合，添加权重信息
+        # If使用了加权融合，添加权重info
         if weight_manager is not None:
             result["weight_manager"] = weight_manager
         
         return result
+    
+    def estimate_pose_manual_sync_time(
+        self,
+        view_ss_input_dicts: List[dict],
+        fixed_shape_latent: torch.Tensor,
+        inference_steps: int = 50,
+    ) -> List[dict]:
+        """
+        思路 1：手动同步时间步模式
+        
+        核心思想：
+        - Pose 正常迭代（使用网络预测的 velocity）
+        - Shape 手动同步到same的时间步（不迭代，直接计算）
+        - 计算平均变化量：xx_s = (shape_final - shape_noise) / n_steps
+        - Step k: shape = shape_noise + k * xx_s
+        
+        优点：
+        - 保持 shape 和 pose 在same的时间步（进度）
+        - 符合训练时的分布（两者在same t）
+        - finally严格等于 Stage 1 的 shape
+        
+        Args:
+            view_ss_input_dicts: List of input dicts for each view
+            fixed_shape_latent: Stage 1 的 shape latent（目标 shape）
+            inference_steps: Number of iteration steps
+            
+        Returns:
+            List of raw pose dicts for each view
+        """
+        from sam3d_objects.pipeline.multi_view_utils import POSE_KEYS
+        
+        ss_generator = self.models["ss_generator"]
+        num_views = len(view_ss_input_dicts)
+        
+        logger.info(f"[Manual Sync Time] Refining pose for {num_views} views")
+        logger.info(f"[Manual Sync Time] Total steps: {inference_steps}")
+        
+        prev_inference_steps = ss_generator.inference_steps
+        ss_generator.inference_steps = inference_steps
+        ss_generator.no_shortcut = True
+        ss_generator.reverse_fn.strength = self.ss_cfg_strength
+        ss_generator.reverse_fn.strength_pm = self.ss_cfg_strength_pm
+        
+        all_view_poses_raw = []
+        
+        with torch.no_grad():
+            with torch.autocast(device_type="cuda", dtype=self.shape_model_dtype):
+                for view_idx in range(num_views):
+                    logger.info(f"[Manual Sync Time] Processing view {view_idx}/{num_views-1}")
+                    
+                    view_input = view_ss_input_dicts[view_idx]
+                    condition_args, condition_kwargs = self.get_condition_input(
+                        self.condition_embedders["ss_condition_embedder"],
+                        view_input,
+                        self.ss_condition_input_mapping,
+                    )
+                    
+                    image = view_input["image"]
+                    bs = image.shape[0]
+                    device = image.device
+                    
+                    if self.is_mm_dit():
+                        latent_shape_dict = {
+                            k: (bs,) + (v.pos_emb.shape[0], v.input_layer.in_features)
+                            for k, v in ss_generator.reverse_fn.backbone.latent_mapping.items()
+                        }
+                    else:
+                        latent_shape_dict = (bs,) + (4096, 8)
+                    
+                    # Initialize：pose 从 noise start，shape 也从随机 noise start
+                    if isinstance(latent_shape_dict, dict):
+                        x_t = {
+                            k: torch.randn(v, device=device)
+                            for k, v in latent_shape_dict.items()
+                        }
+                        # Shape noise（随机生成，不need是 Stage 1 的original noise）
+                        shape_noise = x_t['shape'].clone()
+                        # 目标 shape（Stage 1 result）
+                        shape_final = fixed_shape_latent.clone().to(device)
+                        # Compute平均每步的变化量
+                        xx_s = (shape_final - shape_noise) / inference_steps
+                    else:
+                        x_t = torch.randn(latent_shape_dict, device=device)
+                        shape_noise = None
+                        shape_final = None
+                        xx_s = None
+                    
+                    t_seq = torch.linspace(0, 1, inference_steps + 1).to(device)
+                    dt = 1.0 / inference_steps
+                    
+                    # Iterate
+                    for step_idx in range(inference_steps):
+                        t = t_seq[step_idx]
+                        t_scaled = t * ss_generator.time_scale
+                        
+                        # Get velocity（包含 pose 和 shape 的预测）
+                        velocity = ss_generator.reverse_fn(
+                            x_t,
+                            t_scaled.unsqueeze(0) if t_scaled.dim() == 0 else t_scaled,
+                            *condition_args,
+                            **condition_kwargs
+                        )
+                        
+                        # Update策略
+                        if isinstance(velocity, dict):
+                            for key in velocity.keys():
+                                if key in POSE_KEYS:
+                                    # Pose：正常迭代（使用网络预测的 velocity）
+                                    x_t[key] = x_t[key] + velocity[key] * dt
+                                elif key == 'shape':
+                                    # Shape：手动同步到same的时间步
+                                    # Step k: shape = shape_noise + k * xx_s
+                                    x_t[key] = shape_noise + (step_idx + 1) * xx_s
+                        else:
+                            x_t = x_t + velocity * dt
+                    
+                    # 验证：last一步should等于 shape_final
+                    if isinstance(x_t, dict) and 'shape' in x_t:
+                        shape_final_check = shape_noise + inference_steps * xx_s
+                        diff = torch.abs(x_t['shape'] - shape_final).max().item()
+                        logger.info(f"  View {view_idx} shape final check: max_diff = {diff:.6f} "
+                                   f"(should be ~0, target shape reached)")
+                    
+                    # 提取 pose
+                    view_pose_raw = {}
+                    if isinstance(x_t, dict):
+                        for key in x_t.keys():
+                            if key in POSE_KEYS:
+                                view_pose_raw[key] = x_t[key].detach().cpu()
+                    
+                    all_view_poses_raw.append(view_pose_raw)
+                    
+                    if 'scale' in view_pose_raw:
+                        logger.info(f"  View {view_idx} raw scale: {view_pose_raw['scale'].flatten()[:3]}")
+        
+        ss_generator.inference_steps = prev_inference_steps
+        logger.info(f"[Manual Sync Time] Completed for {num_views} views")
+        
+        return all_view_poses_raw
+    
+    def estimate_pose_mixed_update(
+        self,
+        view_ss_input_dicts: List[dict],
+        fixed_shape_latent: torch.Tensor,
+        inference_steps: int = 50,
+    ) -> List[dict]:
+        """
+        思路 2：混合更新策略模式（固定增量版本）
+        
+        核心思想：
+        - Pose 正常迭代（使用网络预测的 velocity）
+        - Shape 使用混合更新：网络预测 + 固定的目标增量
+        - 预先计算固定增量：xx_s = (shape_final - shape_noise) / n_steps
+        - 混合更新：shape_update = (n-k)/n * v_network + k/n * xx_s
+        - 不再使用动态的 xx_s_k（避免因current状态偏离目标而改变策略）
+        
+        优点：
+        - 目标增量是固定的，策略更稳定
+        - 尊重网络预测，同时逐渐引导到目标
+        - theoretical上finallyshould接近 Stage 1 的 shape（如果权重设计合理）
+        
+        Args:
+            view_ss_input_dicts: List of input dicts for each view
+            fixed_shape_latent: Stage 1 的 shape latent（目标 shape）
+            inference_steps: Number of iteration steps
+            
+        Returns:
+            List of raw pose dicts for each view
+        """
+        from sam3d_objects.pipeline.multi_view_utils import POSE_KEYS
+        
+        ss_generator = self.models["ss_generator"]
+        num_views = len(view_ss_input_dicts)
+        
+        logger.info(f"[Mixed Update] Refining pose for {num_views} views")
+        logger.info(f"[Mixed Update] Total steps: {inference_steps}")
+        
+        prev_inference_steps = ss_generator.inference_steps
+        ss_generator.inference_steps = inference_steps
+        ss_generator.no_shortcut = True
+        ss_generator.reverse_fn.strength = self.ss_cfg_strength
+        ss_generator.reverse_fn.strength_pm = self.ss_cfg_strength_pm
+        
+        all_view_poses_raw = []
+        
+        with torch.no_grad():
+            with torch.autocast(device_type="cuda", dtype=self.shape_model_dtype):
+                for view_idx in range(num_views):
+                    logger.info(f"[Mixed Update] Processing view {view_idx}/{num_views-1}")
+                    
+                    view_input = view_ss_input_dicts[view_idx]
+                    condition_args, condition_kwargs = self.get_condition_input(
+                        self.condition_embedders["ss_condition_embedder"],
+                        view_input,
+                        self.ss_condition_input_mapping,
+                    )
+                    
+                    image = view_input["image"]
+                    bs = image.shape[0]
+                    device = image.device
+                    
+                    if self.is_mm_dit():
+                        latent_shape_dict = {
+                            k: (bs,) + (v.pos_emb.shape[0], v.input_layer.in_features)
+                            for k, v in ss_generator.reverse_fn.backbone.latent_mapping.items()
+                        }
+                    else:
+                        latent_shape_dict = (bs,) + (4096, 8)
+                    
+                    # Initialize：pose 和 shape 都从随机 noise start
+                    if isinstance(latent_shape_dict, dict):
+                        x_t = {
+                            k: torch.randn(v, device=device)
+                            for k, v in latent_shape_dict.items()
+                        }
+                        # Shape noise（随机生成）
+                        shape_noise = x_t['shape'].clone()
+                        # 目标 shape（Stage 1 result）
+                        shape_final = fixed_shape_latent.clone().to(device)
+                        # 预先计算固定的平均增量：xx_s = (shape_final - shape_noise) / n_steps
+                        xx_s = (shape_final - shape_noise) / inference_steps
+                    else:
+                        x_t = torch.randn(latent_shape_dict, device=device)
+                        shape_noise = None
+                        shape_final = None
+                        xx_s = None
+                    
+                    # 时间步序列（从 0 到 1，共 inference_steps + 1 个点）
+                    t_seq = torch.linspace(0, 1, inference_steps + 1).to(device)
+                    dt = 1.0 / inference_steps
+                    
+                    # Iterate（共 inference_steps 步）
+                    for step_idx in range(inference_steps):
+                        t = t_seq[step_idx]
+                        t_scaled = t * ss_generator.time_scale
+                        
+                        # Get velocity（包含 pose 和 shape 的预测）
+                        velocity = ss_generator.reverse_fn(
+                            x_t,
+                            t_scaled.unsqueeze(0) if t_scaled.dim() == 0 else t_scaled,
+                            *condition_args,
+                            **condition_kwargs
+                        )
+                        
+                        # Update策略
+                        if isinstance(velocity, dict):
+                            for key in velocity.keys():
+                                if key in POSE_KEYS:
+                                    # Pose：正常迭代（使用网络预测的 velocity）
+                                    x_t[key] = x_t[key] + velocity[key] * dt
+                                elif key == 'shape':
+                                    # Shape：混合更新策略（固定增量版本）
+                                    # If是last一步，直接设置为目标 shape（确保收敛）
+                                    if step_idx == inference_steps - 1:
+                                        x_t[key] = shape_final
+                                    else:
+                                        # 网络预测的 velocity
+                                        v_network = velocity[key]
+                                        
+                                        # 混合权重
+                                        # 前期更信任网络，后期更倾向于目标
+                                        progress = step_idx / (inference_steps - 1)  # [0, 1] (除了last一步)
+                                        weight_target = progress
+                                        weight_network = 1.0 - weight_target
+                                        
+                                        # 混合更新：网络预测 + 固定目标增量
+                                        # Useoriginal的 xx_s（固定增量）
+                                        shape_update = weight_network * v_network + weight_target * xx_s
+                                        x_t[key] = x_t[key] + shape_update * dt
+                        else:
+                            x_t = x_t + velocity * dt
+                    
+                    # 验证：last一步should等于 shape_final（确保强制设置生效）
+                    if isinstance(x_t, dict) and 'shape' in x_t:
+                        diff = torch.abs(x_t['shape'] - shape_final).max().item()
+                        logger.info(f"  View {view_idx} shape final check: max_diff = {diff:.6f} "
+                                   f"(should be ~0, target shape reached)")
+                    
+                    # 提取 pose
+                    view_pose_raw = {}
+                    if isinstance(x_t, dict):
+                        for key in x_t.keys():
+                            if key in POSE_KEYS:
+                                view_pose_raw[key] = x_t[key].detach().cpu()
+                    
+                    all_view_poses_raw.append(view_pose_raw)
+                    
+                    if 'scale' in view_pose_raw:
+                        logger.info(f"  View {view_idx} raw scale: {view_pose_raw['scale'].flatten()[:3]}")
+        
+        ss_generator.inference_steps = prev_inference_steps
+        logger.info(f"[Mixed Update] Completed for {num_views} views")
+        
+        return all_view_poses_raw
+    
+    def estimate_camera_poses_with_mode(
+        self,
+        view_ss_input_dicts: List[dict],
+        mode: str = "fixed_shape",
+        fixed_shape_latent: torch.Tensor = None,
+        inference_steps: int = 50,
+        **mode_kwargs,
+    ) -> List[dict]:
+        """
+        统一的camera pose估计入口，支持多种模式。
+        
+        支持的模式：
+        - "fixed_shape": 固定 Stage 1 的 shape，只优化 pose
+        - "independent": each view完全独立优化 shape + pose
+        - "manual_sync_time": 手动同步 shape 到same时间步（不迭代，直接计算）
+        - "mixed_update": 混合更新策略（网络预测 + 目标引导）
+        
+        Args:
+            view_ss_input_dicts: List of input dicts for each view
+            mode: 模式名称
+            fixed_shape_latent: Stage 1 的 shape latent（某些模式need）
+            inference_steps: Number of iteration steps
+            **mode_kwargs: 模式特定的parameter
+            
+        Returns:
+            List of raw pose dicts for each view
+        """
+        logger.info("=" * 60)
+        logger.info(f"Camera Pose Estimation Mode: {mode}")
+        logger.info("=" * 60)
+        
+        if mode == "fixed_shape":
+            if fixed_shape_latent is None:
+                raise ValueError("fixed_shape mode requires fixed_shape_latent")
+            return self.refine_pose_per_view(
+                view_ss_input_dicts=view_ss_input_dicts,
+                fixed_shape_latent=fixed_shape_latent,
+                inference_steps=inference_steps,
+            )
+        
+        elif mode == "independent":
+            return self.estimate_pose_independent(
+                view_ss_input_dicts=view_ss_input_dicts,
+                inference_steps=inference_steps,
+            )
+        
+        elif mode == "manual_sync_time":
+            if fixed_shape_latent is None:
+                raise ValueError("manual_sync_time mode requires fixed_shape_latent")
+            return self.estimate_pose_manual_sync_time(
+                view_ss_input_dicts=view_ss_input_dicts,
+                fixed_shape_latent=fixed_shape_latent,
+                inference_steps=inference_steps,
+            )
+        
+        elif mode == "mixed_update":
+            if fixed_shape_latent is None:
+                raise ValueError("mixed_update mode requires fixed_shape_latent")
+            return self.estimate_pose_mixed_update(
+                view_ss_input_dicts=view_ss_input_dicts,
+                fixed_shape_latent=fixed_shape_latent,
+                inference_steps=inference_steps,
+            )
+        
+        else:
+            raise ValueError(
+                f"Unknown camera_pose_mode: {mode}. "
+                f"Supported modes: fixed_shape, independent, manual_sync_time, mixed_update"
+            )

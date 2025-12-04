@@ -75,12 +75,35 @@ class ConfidenceFactors:
 @dataclass 
 class WeightingConfig:
     """Configuration for weight computation."""
-    # Which factors to use
+    # Weight source selection
+    # - "entropy": Use attention entropy only (default, current behavior)
+    # - "visibility": Use self-occlusion based visibility (DDA ray tracing, requires DA3 for camera poses)
+    # - "mixed": Combine entropy and visibility
+    weight_source: str = "entropy"
+    
+    # Which factors to use (for backward compatibility, keep use_entropy)
     use_entropy: bool = True
-    use_patch_mass: bool = False  # 可以后续开启
+    use_patch_mass: bool = False  # can be enabled later
     
     # Entropy-based weighting parameters
     entropy_alpha: float = 30.0  # Gibbs temperature for entropy
+    
+    # Visibility-based weighting parameters
+    visibility_alpha: float = 30.0  # Gibbs temperature for visibility (higher = more contrast)
+    
+    # Mixed mode parameters
+    weight_combine_mode: str = "average"  # "average" or "multiply"
+    visibility_weight_ratio: float = 0.5  # For "average" mode: ratio of visibility vs entropy
+    
+    # Visibility computation callback
+    # Signature: callback(downsampled_coords: np.ndarray, num_views: int, object_pose: dict) -> np.ndarray
+    # Returns: [num_views, num_latents] visibility matrix (0=occluded, 1=visible)
+    # Uses self-occlusion (DDA ray tracing) to determine visibility
+    visibility_callback: Optional[Callable] = field(default=None)
+    
+    # Object pose will be set after Stage 1 (before Stage 2)
+    # This allows the callback to access the pose computed in Stage 1
+    object_pose: Optional[Dict] = field(default=None)
     
     # Patch mass parameters (when enabled)
     patch_mass_gamma: float = 1.0  # Exponent for patch mass
@@ -374,6 +397,11 @@ class LatentWeightManager:
     """
     Manager for computing and applying latent-level fusion weights.
     
+    Supports three weight sources:
+    1. "entropy": Use attention entropy (low entropy = more confident)
+    2. "visibility": Use latent visibility from pointmaps (visible = more confident)
+    3. "mixed": Combine both sources
+    
     Usage:
         manager = LatentWeightManager(config)
         
@@ -381,6 +409,10 @@ class LatentWeightManager:
         for view_idx in range(num_views):
             attention = get_attention_for_view(view_idx)
             manager.add_view_attention(view_idx, attention)
+        
+        # For visibility mode, set visibility matrix
+        if config.weight_source in ["visibility", "mixed"]:
+            manager.set_visibility_matrix(visibility_matrix)  # [num_views, num_latents]
         
         # Set downsample mapping (if available)
         manager.set_downsample_mapping(idx, original_coords, downsampled_coords)
@@ -396,7 +428,8 @@ class LatentWeightManager:
     def __init__(self, config: Optional[WeightingConfig] = None):
         self.config = config or WeightingConfig()
         self._view_attentions: Dict[int, torch.Tensor] = {}
-        self._view_confidences: Dict[int, torch.Tensor] = {}
+        self._view_confidences: Dict[int, torch.Tensor] = {}  # entropy-based
+        self._view_visibilities: Dict[int, torch.Tensor] = {}  # visibility-based
         self._computed_weights: Optional[Dict[int, torch.Tensor]] = None
         self._expanded_weights: Optional[Dict[int, torch.Tensor]] = None
         self._analysis_data: Dict = {}
@@ -410,6 +443,7 @@ class LatentWeightManager:
         """Reset for new inference."""
         self._view_attentions.clear()
         self._view_confidences.clear()
+        self._view_visibilities.clear()
         self._computed_weights = None
         self._expanded_weights = None
         self._analysis_data.clear()
@@ -444,6 +478,33 @@ class LatentWeightManager:
             logger.info(
                 f"[LatentWeightManager] Downsample mapping set: "
                 f"{L_original} original -> {L_downsampled} downsampled"
+            )
+    
+    def set_visibility_matrix(
+        self,
+        visibility_matrix: torch.Tensor,
+    ):
+        """
+        Set visibility matrix for visibility-based weighting.
+        
+        Args:
+            visibility_matrix: [num_views, num_latents] tensor
+                              Values in [0, 1] where 1 = visible, 0 = not visible
+                              Must be computed on downsampled_coords (same dimension as attention)
+        """
+        num_views, num_latents = visibility_matrix.shape
+        
+        for view_idx in range(num_views):
+            self._view_visibilities[view_idx] = visibility_matrix[view_idx].detach()
+        
+        # Log statistics
+        logger.info(f"[LatentWeightManager] Visibility matrix set: {num_views} views x {num_latents} latents")
+        for view_idx in range(num_views):
+            v = visibility_matrix[view_idx]
+            visible_count = (v > 0.5).sum().item()
+            logger.info(
+                f"  View {view_idx}: visible={visible_count}/{num_latents} ({100*visible_count/num_latents:.1f}%), "
+                f"mean={v.mean():.4f}"
             )
     
     def add_view_attention(
@@ -490,24 +551,184 @@ class LatentWeightManager:
     
     def compute_weights(self) -> Dict[int, torch.Tensor]:
         """
-        Compute final fusion weights from collected confidences.
+        Compute final fusion weights based on weight_source config.
+        
+        Weight sources:
+        - "entropy": w_v = softmax(-alpha_e * entropy_v) over views
+        - "visibility": w_v = softmax(alpha_v * visibility_v) over views
+        - "mixed": combine entropy and visibility weights
         
         Returns:
             weights: Dict mapping view_idx -> [L_latent] weights
         """
-        if not self._view_confidences:
-            logger.warning("[LatentWeightManager] No view confidences collected!")
-            return {}
+        weight_source = self.config.weight_source
         
-        self._computed_weights = compute_fusion_weights(
-            self._view_confidences, 
-            self.config
-        )
+        # Entropy-only mode
+        if weight_source == "entropy":
+            if not self._view_confidences:
+                logger.warning("[LatentWeightManager] No view confidences (entropy) collected!")
+                return {}
+            
+            self._computed_weights = self._compute_entropy_weights()
+            
+        # Visibility-only mode (pointmap-based)
+        # Visibility mode (uses self-occlusion / DDA ray tracing)
+        elif weight_source == "visibility":
+            if not self._view_visibilities:
+                logger.warning("[LatentWeightManager] No view visibilities collected!")
+                return {}
+            
+            self._computed_weights = self._compute_visibility_weights()
+            
+        # Mixed mode (combines entropy and visibility)
+        elif weight_source == "mixed":
+            if not self._view_confidences:
+                logger.warning("[LatentWeightManager] No view confidences (entropy) collected for mixed mode!")
+                return {}
+            if not self._view_visibilities:
+                logger.warning("[LatentWeightManager] No view visibilities collected for mixed mode!")
+                return {}
+            
+            self._computed_weights = self._compute_mixed_weights()
+            
+        else:
+            raise ValueError(f"Unknown weight_source: {weight_source}")
         
         # Log statistics
         self._log_weight_statistics()
         
         return self._computed_weights
+    
+    def _compute_entropy_weights(self) -> Dict[int, torch.Tensor]:
+        """
+        Compute weights from entropy using softmax(-alpha * entropy).
+        Lower entropy = higher weight.
+        """
+        views = sorted(self._view_confidences.keys())
+        num_views = len(views)
+        
+        if num_views == 0:
+            return {}
+        if num_views == 1:
+            v = views[0]
+            return {v: torch.ones_like(self._view_confidences[v])}
+        
+        # Stack entropy: [num_views, num_latents]
+        entropy_stack = torch.stack([self._view_confidences[v] for v in views], dim=0)
+        
+        # softmax(-alpha * entropy) over views
+        logits = -self.config.entropy_alpha * entropy_stack / self.config.final_temperature
+        weights = torch.softmax(logits, dim=0)
+        
+        # Apply min weight
+        if self.config.min_weight > 0:
+            weights = weights.clamp(min=self.config.min_weight)
+            weights = weights / weights.sum(dim=0, keepdim=True)
+        
+        return {v: weights[i] for i, v in enumerate(views)}
+    
+    def _compute_visibility_weights(self) -> Dict[int, torch.Tensor]:
+        """
+        Compute weights from visibility using softmax(alpha * visibility).
+        Higher visibility = higher weight.
+        """
+        views = sorted(self._view_visibilities.keys())
+        num_views = len(views)
+        
+        if num_views == 0:
+            return {}
+        if num_views == 1:
+            v = views[0]
+            return {v: torch.ones_like(self._view_visibilities[v])}
+        
+        # Stack visibility: [num_views, num_latents]
+        visibility_stack = torch.stack([self._view_visibilities[v] for v in views], dim=0)
+        
+        # softmax(alpha * visibility) over views
+        # Higher visibility -> higher weight
+        logits = self.config.visibility_alpha * visibility_stack / self.config.final_temperature
+        weights = torch.softmax(logits, dim=0)
+        
+        # Apply min weight
+        if self.config.min_weight > 0:
+            weights = weights.clamp(min=self.config.min_weight)
+            weights = weights / weights.sum(dim=0, keepdim=True)
+        
+        return {v: weights[i] for i, v in enumerate(views)}
+    
+    def _compute_mixed_weights(self) -> Dict[int, torch.Tensor]:
+        """
+        Compute mixed weights from entropy and visibility (Scheme A).
+        
+        Steps:
+        1. Compute entropy weights: w_e = softmax(-alpha_e * entropy)
+        2. Compute visibility weights: w_v = softmax(alpha_v * visibility)
+        3. Combine:
+           - "average": w = (1-r) * w_e + r * w_v
+           - "multiply": w = w_e * w_v, then normalize
+        """
+        # Get views that have both entropy and visibility
+        entropy_views = set(self._view_confidences.keys())
+        visibility_views = set(self._view_visibilities.keys())
+        common_views = sorted(entropy_views & visibility_views)
+        
+        if len(common_views) == 0:
+            logger.warning("[LatentWeightManager] No common views between entropy and visibility!")
+            return {}
+        
+        if len(common_views) == 1:
+            v = common_views[0]
+            return {v: torch.ones_like(self._view_confidences[v])}
+        
+        # Compute entropy weights
+        entropy_weights = self._compute_entropy_weights()
+        
+        # Compute visibility weights
+        visibility_weights = self._compute_visibility_weights()
+        
+        # Combine weights
+        combine_mode = self.config.weight_combine_mode
+        ratio = self.config.visibility_weight_ratio
+        
+        combined_weights = {}
+        
+        for v in common_views:
+            w_e = entropy_weights[v]
+            w_v = visibility_weights[v]
+            
+            if combine_mode == "average":
+                # Weighted average: (1-r) * entropy + r * visibility
+                w = (1 - ratio) * w_e + ratio * w_v
+            elif combine_mode == "multiply":
+                # Multiply and re-normalize (done after loop)
+                w = w_e * w_v
+            else:
+                raise ValueError(f"Unknown weight_combine_mode: {combine_mode}")
+            
+            combined_weights[v] = w
+        
+        # For "multiply" mode, re-normalize over views
+        if combine_mode == "multiply":
+            views = sorted(combined_weights.keys())
+            weights_stack = torch.stack([combined_weights[v] for v in views], dim=0)
+            # Normalize over views
+            weights_stack = weights_stack / weights_stack.sum(dim=0, keepdim=True).clamp(min=1e-10)
+            combined_weights = {v: weights_stack[i] for i, v in enumerate(views)}
+        
+        # Apply min weight
+        if self.config.min_weight > 0:
+            views = sorted(combined_weights.keys())
+            weights_stack = torch.stack([combined_weights[v] for v in views], dim=0)
+            weights_stack = weights_stack.clamp(min=self.config.min_weight)
+            weights_stack = weights_stack / weights_stack.sum(dim=0, keepdim=True)
+            combined_weights = {v: weights_stack[i] for i, v in enumerate(views)}
+        
+        logger.info(
+            f"[LatentWeightManager] Mixed weights computed: "
+            f"mode={combine_mode}, ratio={ratio:.2f}"
+        )
+        
+        return combined_weights
     
     def get_weights(self) -> Optional[Dict[int, torch.Tensor]]:
         """Get computed weights in downsampled dimension (compute if not done yet)."""
@@ -600,6 +821,7 @@ class LatentWeightManager:
             "expanded_weights": self._expanded_weights,
             "entropy_per_view": self._analysis_data.get("entropy_per_view", {}),
             "confidences": self._view_confidences,
+            "visibilities": self._view_visibilities,
             "downsample_idx": self._downsample_idx,
             "original_coords": self._original_coords,
             "downsampled_coords": self._downsampled_coords,

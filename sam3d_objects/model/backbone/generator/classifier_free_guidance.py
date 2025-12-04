@@ -106,7 +106,7 @@ class ClassifierFreeGuidance(torch.nn.Module):
             return _pytree.tree_map(partial(self._cfg_step_tensor, strength=strength), y_cond, y_uncond)
 
     def inner_forward(self, x, t, is_cond, strength, *args_cond, **kwargs_cond):
-        # 标记分支：有 logger 时，先标记为 cond
+        # Mark branch: with logger, mark as cond first
         attention_logger = getattr(self, "_attention_logger", None)
         if attention_logger is not None:
             attention_logger._current_branch = "cond"

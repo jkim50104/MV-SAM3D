@@ -7,12 +7,15 @@ An enhanced multi-view extension for [SAM 3D Objects](https://github.com/faceboo
 ## 🔥 Highlights
 
 - **Adaptive Multi-View Fusion**: Unlike simple averaging, we employ a confidence-aware fusion mechanism that automatically weighs contributions from different views based on their reliability.
-  
+
+- **Multiple Weighting Strategies**: 
+  - **Entropy-based**: Uses attention entropy as uncertainty measure
+  - **Visibility-based**: Uses self-occlusion detection via DDA ray tracing
+  - **Mixed**: Combines both strategies for robust weighting
+
 - **Per-Latent Weighting**: Our method operates at the latent level, enabling fine-grained control over how information from different views is combined for each spatial location.
 
 - **Improved Reconstruction Quality**: Better handling of occluded regions and view-dependent artifacts through intelligent fusion.
-
-- **Easy to Use**: Drop-in replacement with minimal changes to the original pipeline.
 
 ## 📢 Research in Progress
 
@@ -80,23 +83,66 @@ Please follow the installation instructions in the [basic multi-view version](ht
 
 ## Quick Start
 
+### Basic Usage (Entropy Weighting)
+
 ```bash
 python run_inference_weighted.py \
     --input_path ./data/example \
     --mask_prompt stuffed_toy \
-    --image_names 0,1,2,3,4,5
+    --image_names 0,1,2,3,4,5,6,7
 ```
 
-### Key Parameters
+### Using Visibility Weighting (Requires DA3)
+
+To use visibility-based weighting, you need to first run Depth Anything 3 (DA3) to obtain camera poses:
+
+**Step 1: Install Depth Anything 3**
+
+```bash
+# Clone and install Depth Anything 3
+git clone https://github.com/DepthAnything/Depth-Anything-V3.git
+cd Depth-Anything-V3
+pip install -e .
+```
+
+**Step 2: Run DA3 to get camera poses**
+
+```bash
+python scripts/run_da3.py \
+    --image_dir ./data/example/images \
+    --output_dir ./da3_outputs/example
+```
+
+**Step 3: Run weighted inference with visibility**
+
+```bash
+python run_inference_weighted.py \
+    --input_path ./data/example \
+    --mask_prompt stuffed_toy \
+    --image_names 0,1,2,3,4,5,6,7 \
+    --da3_output ./da3_outputs/example/da3_output.npz \
+    --weight_source visibility
+```
+
+## Key Parameters
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--input_path` | Path to input directory | Required |
 | `--mask_prompt` | Mask folder name | None |
 | `--image_names` | Image names (comma-separated) | All images |
-| `--entropy_alpha` | Fusion sharpness (higher = more selective) | 30.0 |
+| `--weight_source` | Weighting strategy: `entropy`, `visibility`, or `mixed` | `entropy` |
+| `--entropy_alpha` | Entropy weighting sharpness (higher = more selective) | 30.0 |
+| `--visibility_alpha` | Visibility weighting sharpness | 30.0 |
+| `--da3_output` | Path to DA3 output (required for visibility weighting) | None |
+| `--self_occlusion_tolerance` | Tolerance for self-occlusion detection (voxel units) | 4.0 |
 | `--no_weighting` | Disable adaptive fusion (use simple average) | False |
 | `--visualize_weights` | Visualize fusion weights | False |
+| `--compute_latent_visibility` | Visualize latent visibility per view | False |
+
+> ⚠️ **Known Issue**: Camera pose estimation (`--estimate_camera_pose`) is currently experimental and may produce inaccurate results. The GT camera poses from DA3 work correctly.
+
+📖 **Full Parameters**: See [README_PARAMETERS.md](README_PARAMETERS.md) for detailed parameter documentation.
 
 ### Data Structure
 

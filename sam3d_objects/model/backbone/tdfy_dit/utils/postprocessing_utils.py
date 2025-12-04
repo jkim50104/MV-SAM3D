@@ -615,7 +615,7 @@ def to_glb(
 
     if with_mesh_postprocess:
         # mesh postprocess
-        # 如果rendering_engine是pytorch3d，禁用fill_holes因为它需要nvdiffrast
+        # If rendering_engine is pytorch3d, disable fill_holes as it requires nvdiffrast
         effective_fill_holes = fill_holes and rendering_engine == "nvdiffrast"
         if fill_holes and rendering_engine == "pytorch3d":
             logger.warning("fill_holes is disabled because rendering_engine is 'pytorch3d' (requires nvdiffrast)")
