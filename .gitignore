@@ -19,7 +19,7 @@ scripts/debug/
 # ============================================
 # Model Weights (too large)
 # ============================================
-checkpoints/
+checkpoints
 *.ckpt
 *.pt
 *.pth

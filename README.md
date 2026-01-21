@@ -87,7 +87,7 @@ Please follow the installation instructions in the [basic multi-view version](ht
 
 ```bash
 python run_inference_weighted.py \
-    --input_path ./data/example \
+    --input_path ./example_data/example \
     --mask_prompt stuffed_toy \
     --image_names 0,1,2,3,4,5,6,7
 ```
@@ -96,7 +96,7 @@ python run_inference_weighted.py \
 
 ```bash
 python run_inference_weighted.py \
-    --input_path ./data/example \
+    --input_path ./example_data/example \
     --mask_prompt stuffed_toy \
     --image_names 0,1,2,3,4,5,6,7 \
     --no_stage1_weighting --no_stage2_weighting
@@ -114,7 +114,7 @@ Please follow the installation instructions at [Depth Anything 3](https://github
 
 ```bash
 python scripts/run_da3.py \
-    --image_dir ./data/example/images \
+    --image_dir ./example_data/example/images \
     --output_dir ./da3_outputs/example
 ```
 
@@ -122,7 +122,7 @@ python scripts/run_da3.py \
 
 ```bash
 python run_inference_weighted.py \
-    --input_path ./data/example \
+    --input_path ./example_data/example \
     --mask_prompt stuffed_toy \
     --image_names 0,1,2,3,4,5,6,7 \
     --da3_output ./da3_outputs/example/da3_output.npz \
