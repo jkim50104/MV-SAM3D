@@ -42,16 +42,16 @@ This is an **active research project**. We are continuously exploring new fusion
     <b>Input Images</b><br>
     <table width="100%" cellpadding="2" cellspacing="2">
     <tr>
+      <td align="center"><img src="demo/demo_data/example/images/0.png" width="80px"/></td>
       <td align="center"><img src="demo/demo_data/example/images/1.png" width="80px"/></td>
       <td align="center"><img src="demo/demo_data/example/images/2.png" width="80px"/></td>
       <td align="center"><img src="demo/demo_data/example/images/3.png" width="80px"/></td>
-      <td align="center"><img src="demo/demo_data/example/images/4.png" width="80px"/></td>
     </tr>
     <tr>
+      <td align="center"><img src="demo/demo_data/example/images/4.png" width="80px"/></td>
       <td align="center"><img src="demo/demo_data/example/images/5.png" width="80px"/></td>
       <td align="center"><img src="demo/demo_data/example/images/6.png" width="80px"/></td>
       <td align="center"><img src="demo/demo_data/example/images/7.png" width="80px"/></td>
-      <td align="center"><img src="demo/demo_data/example/images/8.png" width="80px"/></td>
     </tr>
     </table>
   </td>
