@@ -32,26 +32,26 @@ This is an **active research project**. We are continuously exploring new fusion
 <tr>
   <td align="center" width="33%" style="padding: 5px;">
     <b>Input Image</b><br>
-    <img src="data/example/images/3.png" width="100%" style="max-width: 300px;"/>
+    <img src="demo/demo_data/example/images/3.png" width="100%" style="max-width: 300px;"/>
   </td>
   <td align="center" width="33%" style="padding: 5px;">
     <b>Input Image</b><br>
-    <img src="data/example/images/6.png" width="100%" style="max-width: 300px;"/>
+    <img src="demo/demo_data/example/images/6.png" width="100%" style="max-width: 300px;"/>
   </td>
   <td align="center" width="33%" style="padding: 5px;">
     <b>Input Images</b><br>
     <table width="100%" cellpadding="2" cellspacing="2">
     <tr>
-      <td align="center"><img src="data/example/images/1.png" width="80px"/></td>
-      <td align="center"><img src="data/example/images/2.png" width="80px"/></td>
-      <td align="center"><img src="data/example/images/3.png" width="80px"/></td>
-      <td align="center"><img src="data/example/images/4.png" width="80px"/></td>
+      <td align="center"><img src="demo/demo_data/example/images/1.png" width="80px"/></td>
+      <td align="center"><img src="demo/demo_data/example/images/2.png" width="80px"/></td>
+      <td align="center"><img src="demo/demo_data/example/images/3.png" width="80px"/></td>
+      <td align="center"><img src="demo/demo_data/example/images/4.png" width="80px"/></td>
     </tr>
     <tr>
-      <td align="center"><img src="data/example/images/5.png" width="80px"/></td>
-      <td align="center"><img src="data/example/images/6.png" width="80px"/></td>
-      <td align="center"><img src="data/example/images/7.png" width="80px"/></td>
-      <td align="center"><img src="data/example/images/8.png" width="80px"/></td>
+      <td align="center"><img src="demo/demo_data/example/images/5.png" width="80px"/></td>
+      <td align="center"><img src="demo/demo_data/example/images/6.png" width="80px"/></td>
+      <td align="center"><img src="demo/demo_data/example/images/7.png" width="80px"/></td>
+      <td align="center"><img src="demo/demo_data/example/images/8.png" width="80px"/></td>
     </tr>
     </table>
   </td>
@@ -64,15 +64,15 @@ This is an **active research project**. We are continuously exploring new fusion
 <tr>
   <td align="center" width="33%" style="padding: 5px;">
     <b>3D Result</b><br>
-    <img src="data/example/visualization_results/view3_cropped.gif" width="100%" style="max-width: 300px;"/>
+    <img src="demo/demo_data/example/visualization_results/view3_cropped.gif" width="100%" style="max-width: 300px;"/>
   </td>
   <td align="center" width="33%" style="padding: 5px;">
     <b>3D Result</b><br>
-    <img src="data/example/visualization_results/view6_cropped.gif" width="100%" style="max-width: 300px;"/>
+    <img src="demo/demo_data/example/visualization_results/view6_cropped.gif" width="100%" style="max-width: 300px;"/>
   </td>
   <td align="center" width="33%" style="padding: 5px;">
     <b>3D Result</b><br>
-    <img src="data/example/visualization_results/all_views_cropped.gif" width="100%" style="max-width: 300px;"/>
+    <img src="demo/demo_data/example/visualization_results/all_views_cropped.gif" width="100%" style="max-width: 300px;"/>
   </td>
 </tr>
 </table>
@@ -87,7 +87,7 @@ Please follow the installation instructions in the [basic multi-view version](ht
 
 ```bash
 python run_inference_weighted.py \
-    --input_path ./example_data/example \
+    --input_path ./demo/demo_data/example \
     --mask_prompt stuffed_toy \
     --image_names 0,1,2,3,4,5,6,7
 ```
@@ -96,7 +96,7 @@ python run_inference_weighted.py \
 
 ```bash
 python run_inference_weighted.py \
-    --input_path ./example_data/example \
+    --input_path ./demo/demo_data/example \
     --mask_prompt stuffed_toy \
     --image_names 0,1,2,3,4,5,6,7 \
     --no_stage1_weighting --no_stage2_weighting
