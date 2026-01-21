@@ -122,7 +122,7 @@ python scripts/run_da3.py \
 
 ```bash
 python run_inference_weighted.py \
-    --input_path ./demo/demo_data/example_data/example \
+    --input_path ./demo/demo_data/example \
     --mask_prompt stuffed_toy \
     --image_names 0,1,2,3,4,5,6,7 \
     --da3_output ./demo/da3_outputs/example/da3_output.npz \

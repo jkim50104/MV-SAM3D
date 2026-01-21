@@ -142,7 +142,7 @@ def run_da3_inference(
         possible_paths = [
             DA3_ROOT / "checkpoints" / "DA3NESTED-GIANT-LARGE",
             DA3_ROOT / "checkpoints" / "DA3-GIANT-LARGE",
-            Path.home() / ".cache" / "huggingface" / "hub" / "models--depth-anything--DA3NESTED-GIANT-LARGE",
+            Path.home() / ".cache" / "huggingface" / "hub" / "models--depth-anything--DA3NESTED-GIANT-LARGE" / "snapshots" / "8615eefb62f2db4f8d6ebaa59160086981672829",
         ]
         for p in possible_paths:
             if p.exists():
