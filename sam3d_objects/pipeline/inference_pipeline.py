@@ -1579,7 +1579,7 @@ class InferencePipeline:
         
         # Process外部 pointmap
         if view_pointmaps is not None:
-            assert len(view_pointmaps) == num_views, "Number of pointmaps must match number of images"
+            assert len(view_pointmaps) == num_views, f"Number of pointmaps must match number of images, {len(view_pointmaps)} vs {num_views}"
             logger.info(f"Using external pointmaps for {sum(1 for p in view_pointmaps if p is not None)}/{num_views} views")
         else:
             view_pointmaps = [None] * num_views
