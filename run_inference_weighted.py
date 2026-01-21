@@ -1894,7 +1894,7 @@ def get_output_dir(
     Example:
         visualization/quike/box/quike_box_multiview_s1ea60_s2entropy_a60_20231205_123456/
     """
-    visualization_dir = Path("visualization")
+    visualization_dir = Path("demo/demo_visualization")
     
     # Level 1: Dataset name (last component of input_path)
     dataset_name = input_path.name if input_path.is_dir() else input_path.parent.name

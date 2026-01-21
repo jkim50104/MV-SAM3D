@@ -114,18 +114,18 @@ Please follow the installation instructions at [Depth Anything 3](https://github
 
 ```bash
 python scripts/run_da3.py \
-    --image_dir ./example_data/example/images \
-    --output_dir ./da3_outputs/example
+    --image_dir ./demo/demo_data/example/images \
+    --output_dir ./demo/da3_outputs/example
 ```
 
 **Step 3: Run weighted inference with visibility**
 
 ```bash
 python run_inference_weighted.py \
-    --input_path ./example_data/example \
+    --input_path ./demo/demo_data/example_data/example \
     --mask_prompt stuffed_toy \
     --image_names 0,1,2,3,4,5,6,7 \
-    --da3_output ./da3_outputs/example/da3_output.npz \
+    --da3_output ./demo/da3_outputs/example/da3_output.npz \
     --stage2_weight_source visibility
 ```
 

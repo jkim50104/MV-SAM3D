@@ -29,7 +29,7 @@ checkpoints
 # ============================================
 # Output Results
 # ============================================
-visualization/
+demo_visualization/
 *.glb
 *.ply
 *.obj
