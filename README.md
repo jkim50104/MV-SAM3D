@@ -32,11 +32,11 @@ This is an **active research project**. We are continuously exploring new fusion
 <tr>
   <td align="center" width="33%" style="padding: 5px;">
     <b>Input Image</b><br>
-    <img src="demo/demo_data/example/images/3.png" width="100%" style="max-width: 300px;"/>
+    <img src="demo/demo_data/example/images/2.png" width="100%" style="max-width: 300px;"/>
   </td>
   <td align="center" width="33%" style="padding: 5px;">
     <b>Input Image</b><br>
-    <img src="demo/demo_data/example/images/6.png" width="100%" style="max-width: 300px;"/>
+    <img src="demo/demo_data/example/images/5.png" width="100%" style="max-width: 300px;"/>
   </td>
   <td align="center" width="33%" style="padding: 5px;">
     <b>Input Images</b><br>
