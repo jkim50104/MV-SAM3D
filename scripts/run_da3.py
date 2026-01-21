@@ -29,8 +29,11 @@ from typing import List, Optional, Dict, Any
 # Path setup: DA3 should be a sibling directory to MV-SAM3D
 # ============================================================================
 SCRIPT_DIR = Path(__file__).resolve().parent
+print(SCRIPT_DIR)
 PROJECT_ROOT = SCRIPT_DIR.parent  # MV-SAM3D root
-DA3_ROOT = PROJECT_ROOT.parent / "Depth-Anything-3"
+print(PROJECT_ROOT)
+DA3_ROOT = PROJECT_ROOT / "Depth-Anything-3"
+print(DA3_ROOT)
 
 if not DA3_ROOT.exists():
     raise FileNotFoundError(

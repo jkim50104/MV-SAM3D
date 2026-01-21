@@ -1,4 +1,4 @@
-name: sam3d-objects
+name: real2sim
 channels:
   - conda-forge
 dependencies:

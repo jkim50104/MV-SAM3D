@@ -378,6 +378,65 @@ def load_masks(folder_path, indices_list=None, extension=".png"):
     return masks
 
 
+def load_mask_npz(
+    path,
+    instance_id=None,
+    return_all_instances=True,
+    ignore_id=-1,
+    include_background=False,
+    sort_instance_ids=True,
+):
+    """
+    Load instance masks from an .npz file containing `id_map`.
+
+    The `id_map` is a 2D array where each pixel is:
+      - instance id (>= 0 typically)
+      - ignore_id (default -1) for ignored pixels
+
+    Returns:
+      - If return_all_instances=False:
+          * if instance_id is not None: a single boolean mask (id_map == instance_id)
+          * else: a single boolean mask for "any valid instance" (id_map != ignore_id and (optionally) != 0)
+      - If return_all_instances=True:
+          * a list of boolean masks, one per unique instance id (excluding ignore_id and (optionally) 0)
+
+    Notes:
+      - If include_background=False, id 0 is excluded from instance list and from the "foreground" mask.
+      - Ignored pixels (ignore_id) are always excluded.
+    """
+    npz = np.load(path, allow_pickle=False)
+    if "id_map" not in npz:
+        raise KeyError(f"{path} does not contain key 'id_map'. Keys: {list(npz.files)}")
+
+    id_map = npz["id_map"]
+    if id_map.ndim != 2:
+        raise ValueError(f"'id_map' must be 2D (H,W). Got shape {id_map.shape}")
+
+    valid = (id_map != ignore_id)
+
+    # Single instance requested -> single mask
+    if instance_id is not None:
+        # instance_id can be any int (including 0 if you want)
+        return valid & (id_map == instance_id)
+
+    # Return all instance masks -> list of masks
+    if return_all_instances:
+        ids = np.unique(id_map[valid])
+        if not include_background:
+            ids = ids[ids != 0]
+        if sort_instance_ids:
+            ids = np.sort(ids)
+
+        return [(id_map == int(i)) & valid for i in ids]
+
+    # Default single-mask behavior: "any instance pixel"
+    if include_background:
+        # foreground includes id 0 too (except ignore_id)
+        return valid
+    else:
+        return valid & (id_map != 0)
+    
+
 def display_image(image, masks=None):
     def imshow(image, ax):
         ax.axis("off")
